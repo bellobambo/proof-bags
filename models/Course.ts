@@ -1,0 +1,34 @@
+import { model, models, Schema, type InferSchemaType } from "mongoose";
+
+const courseSchema = new Schema(
+  {
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    description: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    tutorWallet: {
+      type: String,
+      required: true,
+      index: true,
+    },
+    tutorName: {
+      type: String,
+      default: "",
+    },
+  },
+  {
+    timestamps: true,
+  },
+);
+
+export type CourseDocument = InferSchemaType<typeof courseSchema>;
+
+const Course = models.Course || model("Course", courseSchema);
+
+export default Course;
