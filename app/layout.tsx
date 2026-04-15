@@ -1,4 +1,7 @@
 import type { Metadata } from "next";
+
+import { WalletSessionProvider } from "@/components/wallet-session-provider";
+
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,7 +17,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col bg-[var(--background)] font-sans text-[var(--foreground)]">
-        {children}
+        <WalletSessionProvider>{children}</WalletSessionProvider>
       </body>
     </html>
   );
