@@ -11,8 +11,8 @@ export async function POST(request: Request) {
     const title = body.title?.trim?.() ?? "";
     const description = body.description?.trim?.() ?? "";
 
-    if (!tutorWallet || !title || !description) {
-      return errorResponse("tutorWallet, title, and description are required.");
+    if (!tutorWallet || !title) {
+      return errorResponse("tutorWallet and title are required.");
     }
 
     await connectToDatabase();

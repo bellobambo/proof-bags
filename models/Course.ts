@@ -1,4 +1,4 @@
-import { model, models, Schema, type InferSchemaType } from "mongoose";
+import { model, Schema, type InferSchemaType } from "mongoose";
 
 const courseSchema = new Schema(
   {
@@ -9,7 +9,7 @@ const courseSchema = new Schema(
     },
     description: {
       type: String,
-      required: true,
+      default: "",
       trim: true,
     },
     tutorWallet: {
@@ -29,6 +29,6 @@ const courseSchema = new Schema(
 
 export type CourseDocument = InferSchemaType<typeof courseSchema>;
 
-const Course = models.Course || model("Course", courseSchema);
+const Course = model("Course", courseSchema, undefined, { overwriteModels: true });
 
 export default Course;
