@@ -2,8 +2,9 @@ import { Types } from "mongoose";
 
 import Exam from "@/models/Exam";
 import Submission from "@/models/Submission";
+import User from "@/models/User";
 import { connectToDatabase } from "@/lib/db";
-import { errorResponse, successResponse } from "@/lib/api";
+import { errorResponse, normalizeWalletAddress, successResponse } from "@/lib/api";
 import { hasExamAccess } from "@/lib/exam-access";
 import { serializeExam, serializeSubmission } from "@/lib/serializers";
 
@@ -13,11 +14,15 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
-    const walletAddress =
-      new URL(request.url).searchParams.get("walletAddress") ?? undefined;
+    const rawWalletAddress = new URL(request.url).searchParams.get("walletAddress") ?? "";
+    const walletAddress = normalizeWalletAddress(rawWalletAddress);
 
     if (!Types.ObjectId.isValid(id)) {
       return errorResponse("Exam id is invalid.");
+    }
+
+    if (!walletAddress) {
+      return errorResponse("walletAddress is required.", 403);
     }
 
     await connectToDatabase();
@@ -26,6 +31,18 @@ export async function GET(
 
     if (!exam) {
       return errorResponse("Exam not found.", 404);
+    }
+
+    const user = await User.findOne({ walletAddress });
+
+    if (!user) {
+      return errorResponse("Registered user not found.", 403);
+    }
+
+    const isTutorOwner = user.role === "tutor" && walletAddress === exam.tutorWallet;
+
+    if (user.role === "tutor" && !isTutorOwner) {
+      return errorResponse("Only the tutor who created this exam can open it.", 403);
     }
 
     const canViewAnswers = walletAddress === exam.tutorWallet;

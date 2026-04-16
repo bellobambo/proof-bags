@@ -29,6 +29,8 @@ export function getServerEnv() {
     platformTreasuryWallet: readEnv("PLATFORM_TREASURY_WALLET"),
     bagsTokenUrl: readEnv("BAGS_TOKEN_URL"),
     bagsApiKey: readOptionalEnv("BAGS_API_KEY"),
+    openAiApiKey: readOptionalEnv("OPENAI_API_KEY"),
+    openAiModel: readOptionalEnv("OPENAI_MODEL"),
     payoutAuthoritySecretKey: process.env.PLATFORM_SIGNER_SECRET_KEY ?? "",
     rewardThresholdPercent: Number(process.env.REWARD_THRESHOLD_PERCENT ?? "80"),
     rewardAmountTokens: Number(process.env.REWARD_AMOUNT_TOKENS ?? "0"),

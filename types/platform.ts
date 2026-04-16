@@ -1,3 +1,5 @@
+import type { OptionKey, QuestionOptions } from "@/lib/exam-questions";
+
 export type UserRole = "tutor" | "student";
 
 export type PlatformUser = {
@@ -22,8 +24,8 @@ export type Course = {
 export type ExamQuestion = {
   id: string;
   prompt: string;
-  options: string[];
-  correctOptionIndex?: number;
+  options: QuestionOptions;
+  correctOptionKey?: OptionKey;
 };
 
 export type Exam = {
@@ -49,7 +51,7 @@ export type Submission = {
   rewardTokens: number;
   answers: Array<{
     questionId: string;
-    selectedOptionIndex: number;
+    selectedOptionKey: OptionKey;
   }>;
   createdAt: string;
   updatedAt: string;

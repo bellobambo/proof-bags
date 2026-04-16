@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import type { ExamQuestionInput, OptionKey } from "@/lib/exam-questions";
 import { apiFetch } from "@/lib/client-api";
 import type { Exam, Submission } from "@/types/platform";
 
@@ -45,11 +46,7 @@ export function useExams() {
     description: string;
     tokenPrice: number;
     passThresholdPercent: number;
-    questions: Array<{
-      prompt: string;
-      options: string[];
-      correctOptionIndex: number;
-    }>;
+    questions: ExamQuestionInput[];
   }) {
     try {
       setIsLoading(true);
@@ -97,7 +94,7 @@ export function useExams() {
   async function submitExam(payload: {
     examId: string;
     studentWallet: string;
-    answers: Array<{ questionId: string; selectedOptionIndex: number }>;
+    answers: Array<{ questionId: string; selectedOptionKey: OptionKey }>;
   }) {
     try {
       setIsLoading(true);

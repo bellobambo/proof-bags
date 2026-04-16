@@ -38,6 +38,14 @@ export function useBagsSwap() {
       const connection = new Connection(getClientEnv().solanaRpcUrl, "confirmed");
       const transaction = decodeBase64Transaction(swap.swapTransaction);
       const result = await params.wallet.signAndSendTransaction(transaction);
+      console.log("[bags-swap] submitted transaction", {
+        signature: result.signature,
+        examId: params.examId,
+        studentWallet: params.studentWallet,
+        recentBlockhash: transaction.message.recentBlockhash,
+        lastValidBlockHeight: swap.lastValidBlockHeight,
+        estimatedOutputTokens: swap.estimatedOutputTokens,
+      });
 
       await connection.confirmTransaction(
         {
@@ -47,6 +55,9 @@ export function useBagsSwap() {
         },
         "confirmed",
       );
+      console.log("[bags-swap] confirmed transaction", {
+        signature: result.signature,
+      });
 
       return {
         ...swap,

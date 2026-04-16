@@ -11,8 +11,8 @@ import Exam from "@/models/Exam";
 export const dynamic = "force-dynamic";
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
-const MIN_INPUT_LAMPORTS = 0.01 * LAMPORTS_PER_SOL;
-const MAX_INPUT_LAMPORTS = 5 * LAMPORTS_PER_SOL;
+const MIN_INPUT_LAMPORTS = 0.0001 * LAMPORTS_PER_SOL;
+const MAX_INPUT_LAMPORTS = 0.1 * LAMPORTS_PER_SOL;
 
 function toTokenBaseUnits(amountTokens: number, decimals: number) {
   return BigInt(Math.round(amountTokens * 10 ** decimals));

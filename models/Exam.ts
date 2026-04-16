@@ -1,5 +1,35 @@
 import { model, models, Schema, type InferSchemaType, Types } from "mongoose";
 
+import { OPTION_KEYS } from "@/lib/exam-questions";
+
+const questionOptionsSchema = new Schema(
+  {
+    A: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    B: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    C: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    D: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+  },
+  {
+    _id: false,
+  },
+);
+
 const questionSchema = new Schema(
   {
     prompt: {
@@ -8,17 +38,13 @@ const questionSchema = new Schema(
       trim: true,
     },
     options: {
-      type: [String],
-      validate: {
-        validator: (options: string[]) => options.length >= 2,
-        message: "Each question must have at least two options.",
-      },
+      type: questionOptionsSchema,
       required: true,
     },
-    correctOptionIndex: {
-      type: Number,
+    correctOptionKey: {
+      type: String,
       required: true,
-      min: 0,
+      enum: OPTION_KEYS,
     },
   },
   {

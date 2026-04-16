@@ -1,9 +1,12 @@
 import { Types } from "mongoose";
 
 import Exam from "@/models/Exam";
+import type { ExamDocument } from "@/models/Exam";
 import Payment from "@/models/Payment";
 import Submission from "@/models/Submission";
+import User from "@/models/User";
 import { connectToDatabase } from "@/lib/db";
+import { normalizeStoredExamQuestion, OPTION_KEYS } from "@/lib/exam-questions";
 import { errorResponse, normalizeWalletAddress, successResponse } from "@/lib/api";
 import { getServerEnv } from "@/lib/env";
 import { serializeSubmission } from "@/lib/serializers";
@@ -35,6 +38,16 @@ export async function POST(
       return errorResponse("Exam not found.", 404);
     }
 
+    const user = await User.findOne({ walletAddress: studentWallet });
+
+    if (!user) {
+      return errorResponse("Registered user not found.", 403);
+    }
+
+    if (user.role !== "student") {
+      return errorResponse("Only students can submit exams.", 403);
+    }
+
     const verifiedPayment = await Payment.findOne({
       examId: exam._id,
       studentWallet,
@@ -45,20 +58,32 @@ export async function POST(
       return errorResponse("Payment verification is required before submission.", 403);
     }
 
-    const answerMap = new Map<string, number>(
-      answers.map((answer: { questionId: string; selectedOptionIndex: number }) => [
+    const hasInvalidAnswer = answers.some(
+      (answer: { selectedOptionKey: string }) =>
+        typeof answer.selectedOptionKey !== "string"
+        || !OPTION_KEYS.includes(answer.selectedOptionKey as (typeof OPTION_KEYS)[number]),
+    );
+
+    if (hasInvalidAnswer) {
+      return errorResponse("Each answer must use option A, B, C, or D.");
+    }
+
+    if (answers.length !== exam.questions.length) {
+      return errorResponse("A submission must answer every question.");
+    }
+
+    const answerMap = new Map<string, string>(
+      answers.map((answer: { questionId: string; selectedOptionKey: string }) => [
         String(answer.questionId),
-        Number(answer.selectedOptionIndex),
+        String(answer.selectedOptionKey),
       ]),
     );
 
     const correctAnswers = exam.questions.reduce(
-      (
-        score: number,
-        question: { _id: { toString: () => string }; correctOptionIndex: number },
-      ) => {
-        const selectedOptionIndex = answerMap.get(question._id.toString());
-        return score + Number(selectedOptionIndex === question.correctOptionIndex);
+      (score: number, question: ExamDocument["questions"][number]) => {
+        const normalizedQuestion = normalizeStoredExamQuestion(question);
+        const selectedOptionKey = answerMap.get(question._id.toString());
+        return score + Number(selectedOptionKey === normalizedQuestion.correctOptionKey);
       },
       0,
     );

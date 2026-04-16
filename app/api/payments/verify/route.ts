@@ -1,5 +1,6 @@
 import Exam from "@/models/Exam";
 import Payment from "@/models/Payment";
+import User from "@/models/User";
 import { connectToDatabase } from "@/lib/db";
 import { errorResponse, normalizeWalletAddress, successResponse } from "@/lib/api";
 import { serializePayment } from "@/lib/serializers";
@@ -28,6 +29,16 @@ export async function POST(request: Request) {
 
     if (!exam) {
       return errorResponse("Exam not found.", 404);
+    }
+
+    const user = await User.findOne({ walletAddress: studentWallet });
+
+    if (!user) {
+      return errorResponse("Registered user not found.", 403);
+    }
+
+    if (user.role !== "student") {
+      return errorResponse("Only students can unlock exams.", 403);
     }
 
     const existingPayment = await Payment.findOne({ transactionSignature: signature });

@@ -1,0 +1,13 @@
+Question 1: What is the capital of France?
+Option A: Berlin
+Option B: Madrid
+Option C: Paris
+Option D: Rome
+Correct Answer: C
+
+Question 2: Which gas do plants absorb from the atmosphere?
+Option A: Oxygen
+Option B: Carbon Dioxide
+Option C: Hydrogen
+Option D: Nitrogen
+Correct Answer: B

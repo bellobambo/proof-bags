@@ -5,6 +5,7 @@ import type { ExamDocument } from "@/models/Exam";
 import type { PaymentDocument } from "@/models/Payment";
 import type { SubmissionDocument } from "@/models/Submission";
 import type { UserDocument } from "@/models/User";
+import { normalizeStoredExamQuestion } from "@/lib/exam-questions";
 
 export function serializeUser(user: HydratedDocument<UserDocument>) {
   return {
@@ -41,14 +42,18 @@ export function serializeExam(
     tutorWallet: exam.tutorWallet,
     tokenPrice: exam.tokenPrice,
     passThresholdPercent: exam.passThresholdPercent,
-    questions: exam.questions.map((question) => ({
-      id: question._id?.toString() ?? question.prompt,
-      prompt: question.prompt,
-      options: question.options,
-      correctOptionIndex: options?.includeAnswers
-        ? question.correctOptionIndex
-        : undefined,
-    })),
+    questions: exam.questions.map((question) => {
+      const normalizedQuestion = normalizeStoredExamQuestion(question);
+
+      return {
+        id: question._id?.toString() ?? normalizedQuestion.prompt,
+        prompt: normalizedQuestion.prompt,
+        options: normalizedQuestion.options,
+        correctOptionKey: options?.includeAnswers
+          ? normalizedQuestion.correctOptionKey
+          : undefined,
+      };
+    }),
     createdAt: exam.createdAt,
     updatedAt: exam.updatedAt,
   };

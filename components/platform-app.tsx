@@ -3,7 +3,7 @@
 import { Button, Drawer, Input, Modal } from "antd";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 
 import { useCourses } from "@/hooks/useCourses";
 import { useCreateCourse } from "@/hooks/useCreateCourse";
@@ -13,15 +13,20 @@ import { useVerifyPayment } from "@/hooks/useVerifyPayment";
 import { useBagsSwap } from "@/hooks/useBagsSwap";
 import { useWalletSession } from "@/components/wallet-session-provider";
 import { apiFetch } from "@/lib/client-api";
-import { getClientEnv } from "@/lib/env";
+import {
+  createEmptyQuestionInput,
+  OPTION_KEYS,
+  parseTemplateQuestions,
+  validateExamQuestionInput,
+  type ExamQuestionInput,
+  type OptionKey,
+} from "@/lib/exam-questions";
 import type { Course, Exam, PlatformUser, UserRole } from "@/types/platform";
 import type { SolanaProvider } from "@/types/wallet";
 
-type QuestionDraft = {
-  prompt: string;
-  options: string;
-  correctOptionIndex: number;
-};
+type QuestionDraft = ExamQuestionInput;
+type ExamCreationMode = "manual" | "upload" | "ai";
+const BAGS_TOKEN_URL = "https://bags.fm/$BELLOBAMBO";
 
 function formatWalletAddress(walletAddress: string) {
   if (walletAddress.length <= 10) {
@@ -58,6 +63,20 @@ async function fetchBalance(walletAddress: string) {
   }>(`/api/token/balance/${walletAddress}`);
 
   return data.balance;
+}
+
+function formatTokenBalance(amountRaw: string, decimals: number) {
+  const normalizedRaw = amountRaw.replace(/^0+/, "") || "0";
+
+  if (decimals <= 0) {
+    return normalizedRaw;
+  }
+
+  const paddedRaw = normalizedRaw.padStart(decimals + 1, "0");
+  const whole = paddedRaw.slice(0, -decimals) || "0";
+  const fraction = paddedRaw.slice(-decimals).padEnd(Math.max(decimals, 12), "0");
+
+  return `${whole}.${fraction}`;
 }
 
 async function fetchExamList(filters?: { courseId?: string; tutorWallet?: string }) {
@@ -109,7 +128,6 @@ const { TextArea } = Input;
 
 export function PlatformApp() {
   const pathname = usePathname();
-  const clientEnv = getClientEnv();
   const isExamsPage = pathname === "/exams";
   const { courses, refresh: refreshCourses, isLoading: coursesLoading } = useCourses();
   const { createCourse, isSubmitting: courseSubmitting } = useCreateCourse();
@@ -142,7 +160,7 @@ export function PlatformApp() {
   const [examUnlocked, setExamUnlocked] = useState(false);
   const [latestScore, setLatestScore] = useState("");
   const [paymentSignature, setPaymentSignature] = useState("");
-  const [tokenBalance, setTokenBalance] = useState<number | null>(null);
+  const [tokenBalanceDisplay, setTokenBalanceDisplay] = useState("Unavailable");
   const [statusMessage, setStatusMessage] = useState("");
   const [isActionsDrawerOpen, setIsActionsDrawerOpen] = useState(false);
   const [isCreateCourseModalOpen, setIsCreateCourseModalOpen] = useState(false);
@@ -157,19 +175,24 @@ export function PlatformApp() {
     title: "",
     description: "",
     tokenPrice: "5",
-    passThresholdPercent: "70",
   });
-  const [questions, setQuestions] = useState<QuestionDraft[]>([
-    {
-      prompt: "",
-      options: "Option A\nOption B\nOption C\nOption D",
-      correctOptionIndex: 0,
-    },
-  ]);
-  const [studentAnswers, setStudentAnswers] = useState<Record<string, number>>({});
+  const [examCreationMode, setExamCreationMode] = useState<ExamCreationMode>("manual");
+  const [questions, setQuestions] = useState<QuestionDraft[]>([createEmptyQuestionInput()]);
+  const [uploadTemplateFileName, setUploadTemplateFileName] = useState("");
+  const [aiConfig, setAiConfig] = useState({
+    questionCount: "5",
+    additionalContext: "",
+    lectureNotesText: "",
+    lectureNotesFileName: "",
+  });
+  const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
+  const [studentAnswers, setStudentAnswers] = useState<Record<string, OptionKey>>({});
   const isRegistered = Boolean(registeredUser);
   const activeRole = registeredUser?.role ?? role;
   const selectedCourseTitle = courses.find((course) => course.id === selectedCourseId)?.title;
+  const isTutorViewingOwnExam = Boolean(
+    selectedExam && activeRole === "tutor" && selectedExam.tutorWallet === walletAddress,
+  );
 
   useEffect(() => {
     let active = true;
@@ -177,7 +200,7 @@ export function PlatformApp() {
     void Promise.resolve().then(async () => {
       if (!walletAddress) {
         if (active) {
-          setTokenBalance(null);
+          setTokenBalanceDisplay("Unavailable");
         }
         return;
       }
@@ -185,11 +208,11 @@ export function PlatformApp() {
       try {
         const balance = await fetchBalance(walletAddress);
         if (active) {
-          setTokenBalance(balance.amount);
+          setTokenBalanceDisplay(formatTokenBalance(balance.amountRaw, balance.decimals));
         }
       } catch {
         if (active) {
-          setTokenBalance(null);
+          setTokenBalanceDisplay("Unavailable");
         }
       }
     });
@@ -354,22 +377,117 @@ export function PlatformApp() {
     }
   }
 
+  function resetExamBuilder() {
+    setExamCreationMode("manual");
+    setQuestions([createEmptyQuestionInput()]);
+    setUploadTemplateFileName("");
+    setAiConfig({
+      questionCount: "5",
+      additionalContext: "",
+      lectureNotesText: "",
+      lectureNotesFileName: "",
+    });
+  }
+
   function handleOpenCreateExamDrawer(courseId: string) {
     setSelectedCourseId(courseId);
     setExamForm({
       title: "",
       description: "",
       tokenPrice: "5",
-      passThresholdPercent: "70",
     });
-    setQuestions([
-      {
-        prompt: "",
-        options: "Option A\nOption B\nOption C\nOption D",
-        correctOptionIndex: 0,
-      },
-    ]);
+    resetExamBuilder();
     setIsCreateExamDrawerOpen(true);
+  }
+
+  function updateQuestion(index: number, updater: (question: QuestionDraft) => QuestionDraft) {
+    setQuestions((current) =>
+      current.map((question, questionIndex) =>
+        questionIndex === index ? updater(question) : question,
+      ),
+    );
+  }
+
+  async function handleUploadTemplateFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      const templateContent = (await file.text()).trim();
+
+      if (!templateContent) {
+        const error = new Error("Upload a completed template before loading questions.");
+        console.error("Failed to load exam questions from template.", {
+          fileName: file.name,
+          reason: error.message,
+        });
+        setStatusMessage(error.message);
+        return;
+      }
+
+      const parsedQuestions = parseTemplateQuestions(templateContent);
+      setQuestions(parsedQuestions);
+      setUploadTemplateFileName(file.name);
+      setExamCreationMode("upload");
+      setStatusMessage(`${parsedQuestions.length} question(s) loaded from template.`);
+    } catch (error) {
+      console.error("Failed to load exam questions from template.", {
+        fileName: file.name,
+        error,
+      });
+      setStatusMessage(
+        error instanceof Error ? error.message : "Unable to parse uploaded questions.",
+      );
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  async function handleLectureNotesFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    const fileText = await file.text();
+    setAiConfig((current) => ({
+      ...current,
+      lectureNotesText: fileText,
+      lectureNotesFileName: file.name,
+    }));
+  }
+
+  async function handleGenerateQuestionsWithAi() {
+    if (!aiConfig.lectureNotesText.trim()) {
+      setStatusMessage("Upload lecture notes before generating questions.");
+      return;
+    }
+
+    try {
+      setIsGeneratingQuestions(true);
+      const data = await apiFetch<{ questions: QuestionDraft[] }>("/api/exams/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          lectureNotes: aiConfig.lectureNotesText,
+          questionCount: Number(aiConfig.questionCount),
+          additionalContext: aiConfig.additionalContext,
+        }),
+      });
+
+      setQuestions(data.questions);
+      setExamCreationMode("ai");
+      setStatusMessage(`${data.questions.length} AI-generated question(s) ready for review.`);
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "Unable to generate questions with AI.",
+      );
+    } finally {
+      setIsGeneratingQuestions(false);
+    }
   }
 
   async function handleCreateExam() {
@@ -378,21 +496,30 @@ export function PlatformApp() {
       return;
     }
 
+    if (!examForm.title.trim() || !examForm.description.trim()) {
+      setStatusMessage("Enter the exam title and description.");
+      return;
+    }
+
+    let normalizedQuestions: QuestionDraft[] = [];
+
+    try {
+      normalizedQuestions = questions.map((question) => validateExamQuestionInput(question));
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "Each question must be complete.",
+      );
+      return;
+    }
+
     const exam = await createExam({
       tutorWallet: walletAddress,
       courseId: selectedCourseId,
-      title: examForm.title,
-      description: examForm.description,
+      title: examForm.title.trim(),
+      description: examForm.description.trim(),
       tokenPrice: Number(examForm.tokenPrice),
-      passThresholdPercent: Number(examForm.passThresholdPercent),
-      questions: questions.map((question) => ({
-        prompt: question.prompt,
-        options: question.options
-          .split("\n")
-          .map((option) => option.trim())
-          .filter(Boolean),
-        correctOptionIndex: question.correctOptionIndex,
-      })),
+      passThresholdPercent: 70,
+      questions: normalizedQuestions,
     });
 
     setSelectedExam(exam);
@@ -401,15 +528,8 @@ export function PlatformApp() {
       title: "",
       description: "",
       tokenPrice: "5",
-      passThresholdPercent: "70",
     });
-    setQuestions([
-      {
-        prompt: "",
-        options: "Option A\nOption B\nOption C\nOption D",
-        correctOptionIndex: 0,
-      },
-    ]);
+    resetExamBuilder();
     setIsCreateExamDrawerOpen(false);
     setStatusMessage(`Exam created. ID: ${exam.id}`);
   }
@@ -480,7 +600,7 @@ export function PlatformApp() {
     );
 
     const balance = await fetchBalance(walletAddress);
-    setTokenBalance(balance.amount);
+    setTokenBalanceDisplay(formatTokenBalance(balance.amountRaw, balance.decimals));
   }
 
   async function handleSubmitExam() {
@@ -488,9 +608,18 @@ export function PlatformApp() {
       return;
     }
 
+    const hasUnansweredQuestions = selectedExam.questions.some(
+      (question) => !studentAnswers[question.id],
+    );
+
+    if (hasUnansweredQuestions) {
+      setStatusMessage("Answer every question before submitting the exam.");
+      return;
+    }
+
     const answers = selectedExam.questions.map((question) => ({
       questionId: question.id,
-      selectedOptionIndex: studentAnswers[question.id] ?? -1,
+      selectedOptionKey: studentAnswers[question.id],
     }));
 
     const result = await submitExam({
@@ -544,9 +673,14 @@ export function PlatformApp() {
           <div className="flex flex-wrap items-center gap-2 lg:justify-end">
             {(isExamsPage || walletAddress || isRegistered) ? (
               <>
-                <span className=" px-4 py-2 ">
+                <span className="px-4 py-2">
                   {walletAddress ? formatWalletAddress(walletAddress) : "Not connected"}
                 </span>
+                {walletAddress ? (
+                  <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-2 text-sm text-[#46666c]">
+                    BAGS balance: {tokenBalanceDisplay}
+                  </div>
+                ) : null}
               </>
             ) : null}
             {isRegistered ? (
@@ -747,6 +881,7 @@ export function PlatformApp() {
                   const relatedCourse = courses.find((course) => course.id === exam.courseId);
                   const isStudentEnrolled = enrolledCourseIds.includes(exam.courseId);
                   const isTutorOwner = exam.tutorWallet === walletAddress;
+                  const isTutorBlocked = activeRole === "tutor" && !isTutorOwner;
                   const buttonLabel =
                     activeRole === "student"
                       ? isStudentEnrolled
@@ -754,16 +889,13 @@ export function PlatformApp() {
                         : "Enroll to Take"
                       : isTutorOwner
                         ? "Open Exam"
-                        : "View Exam";
+                        : "Only Creator Can Open";
 
                   return (
                     <article
                       key={exam.id}
                       className="rounded-xl border border-[var(--border)] bg-white p-6"
                     >
-                      <p className="text-xs uppercase tracking-[0.22em] text-[#5a787d]">
-                        {relatedCourse?.title || "Course"} • {exam.tokenPrice} token(s)
-                      </p>
                       <h3 className="mt-2 text-xl font-semibold text-[var(--primary-strong)]">
                         {exam.title}
                       </h3>
@@ -774,15 +906,17 @@ export function PlatformApp() {
                         {formatWalletAddress(exam.tutorWallet)}
                       </p>
                       <p className="mt-3 text-sm leading-6 text-[#46666c]">{exam.description}</p>
-                      <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-[#6c878c]">
-                        <span>{exam.questions.length} question(s)</span>
-                        <span>Pass mark: {exam.passThresholdPercent}%</span>
-                      </div>
+                      <p className="mt-3 text-xs uppercase tracking-[0.22em] text-[#5a787d]">
+                        {relatedCourse?.title || "Course"} • Access fee: {exam.tokenPrice} token(s)
+                      </p>
+          
                       <div className="mt-5">
                         <button
                           type="button"
                           onClick={() => void loadExam(exam.id)}
-                          disabled={activeRole === "student" && !isStudentEnrolled}
+                          disabled={
+                            (activeRole === "student" && !isStudentEnrolled) || isTutorBlocked
+                          }
                           className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--primary-strong)] disabled:cursor-not-allowed disabled:bg-[#9ab3b8]"
                         >
                           {buttonLabel}
@@ -808,7 +942,7 @@ export function PlatformApp() {
         open={isActionsDrawerOpen}
         width={360}
       >
-        <div className="grid gap-4">
+        <div className="grid gap-6">
           <Link
             href="/exams"
             onClick={() => setIsActionsDrawerOpen(false)}
@@ -829,10 +963,10 @@ export function PlatformApp() {
             </button>
           ) : null}
           <a
-            href={clientEnv.bagsTokenUrl || "#"}
+            href={BAGS_TOKEN_URL}
             target="_blank"
             rel="noreferrer"
-            className="rounded-lg border border-[var(--border)] bg-white px-4 py-3 text-sm font-medium text-[var(--primary-strong)] transition hover:border-[var(--primary)] hover:bg-[var(--primary-soft)]"
+            className="rounded-lg border-2 border-[var(--primary)] bg-[var(--primary)] px-4 py-3 text-sm font-medium text-white transition hover:border-[var(--primary-strong)] hover:bg-[var(--primary-strong)]"
           >
             Buy token on Bags
           </a>
@@ -840,7 +974,7 @@ export function PlatformApp() {
             Selected course: {selectedCourseTitle || "None"}
           </div>
           <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[#46666c]">
-            Token balance: {tokenBalance ?? "Unavailable"}
+            Token balance: {tokenBalanceDisplay}
           </div>
           {statusMessage ? (
             <div className="rounded-lg border border-[var(--border)] bg-[var(--primary-soft)] px-4 py-3 text-sm text-[var(--primary-strong)]">
@@ -855,7 +989,7 @@ export function PlatformApp() {
           selectedExam ? (
             <div>
               <p className="text-xs uppercase tracking-[0.22em] text-[var(--primary)]">
-                {selectedExam.tokenPrice} token(s)
+                Access fee: {selectedExam.tokenPrice} token(s)
               </p>
               <h2 className="mt-2 text-2xl font-semibold text-[var(--primary-strong)]">
                 {selectedExam.title}
@@ -866,7 +1000,7 @@ export function PlatformApp() {
         placement="right"
         onClose={() => setIsExamDrawerOpen(false)}
         open={isExamDrawerOpen}
-        width={560}
+        width={1000}
       >
         {selectedExam ? (
           <div className="space-y-5">
@@ -875,24 +1009,24 @@ export function PlatformApp() {
                 {selectedExam.description}
               </p>
               <p className="mt-3 text-sm text-[#46666c]">
-                Access: {examUnlocked ? "Unlocked" : "Payment required"}
+                Access: {isTutorViewingOwnExam ? "Creator preview" : examUnlocked ? "Unlocked" : "Payment required"}
               </p>
               <p className="text-sm text-[#46666c]">
                 Latest score: {latestScore || "No submission yet"}
               </p>
             </div>
 
-            {!examUnlocked ? (
+            {!examUnlocked && !isTutorViewingOwnExam ? (
               <div className="rounded-xl border border-[var(--border)] bg-[var(--primary-soft)] p-5">
                 <p className="text-sm leading-6 text-[var(--primary-strong)]">
                   If your balance is low, buy or swap enough tokens, then unlock the exam.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-3">
                   <a
-                    href={clientEnv.bagsTokenUrl || "#"}
+                    href={BAGS_TOKEN_URL}
                     target="_blank"
                     rel="noreferrer"
-                    className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--primary-strong)]"
+                    className="rounded-lg border-2 border-[var(--primary)] bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition hover:border-[var(--primary-strong)] hover:bg-[var(--primary-strong)]"
                   >
                     Buy on Bags
                   </a>
@@ -916,44 +1050,54 @@ export function PlatformApp() {
               </div>
             ) : (
               <div className="space-y-4">
-                {selectedExam.questions.map((question) => (
+                {selectedExam.questions.map((question, index) => (
                   <div
                     key={question.id}
                     className="rounded-xl border border-[var(--border)] p-4"
                   >
+                    <p className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--primary)]">
+                      Question {index + 1}
+                    </p>
                     <p className="font-medium text-[var(--primary-strong)]">
                       {question.prompt}
                     </p>
                     <div className="mt-3 grid gap-2">
-                      {question.options.map((option, optionIndex) => (
+                      {OPTION_KEYS.map((optionKey) => (
                         <button
-                          key={`${question.id}-${optionIndex}`}
+                          key={`${question.id}-${optionKey}`}
                           type="button"
-                          onClick={() =>
-                            setStudentAnswers((current) => ({
-                              ...current,
-                              [question.id]: optionIndex,
-                            }))
+                          onClick={
+                            isTutorViewingOwnExam
+                              ? undefined
+                              : () =>
+                                  setStudentAnswers((current) => ({
+                                    ...current,
+                                    [question.id]: optionKey,
+                                  }))
                           }
+                          disabled={isTutorViewingOwnExam}
                           className={`rounded-lg border px-4 py-3 text-left transition ${
-                            studentAnswers[question.id] === optionIndex
+                            studentAnswers[question.id] === optionKey
                               ? "border-[var(--primary)] bg-[var(--primary)] text-white"
                               : "border-[var(--border)] text-[#35575d] hover:border-[var(--primary)]"
-                          }`}
+                          } ${isTutorViewingOwnExam ? "cursor-default hover:border-[var(--border)] disabled:opacity-100" : ""}`}
                         >
-                          {option}
+                          <span className="font-semibold">{optionKey}.</span>{" "}
+                          {question.options[optionKey]}
                         </button>
                       ))}
                     </div>
                   </div>
                 ))}
-                <button
-                  type="button"
-                  onClick={() => void handleSubmitExam()}
-                  className="rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-white transition hover:bg-[var(--primary-strong)]"
-                >
-                  Submit Exam
-                </button>
+                {!isTutorViewingOwnExam ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleSubmitExam()}
+                    className="rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-white transition hover:bg-[var(--primary-strong)]"
+                  >
+                    Submit Exam
+                  </button>
+                ) : null}
               </div>
             )}
           </div>
@@ -1012,7 +1156,7 @@ export function PlatformApp() {
           </label>
           <div className="grid gap-3 md:grid-cols-2">
             <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
-              Token price
+              Exam access fee
               <Input
                 value={examForm.tokenPrice}
                 onChange={(event) =>
@@ -1026,102 +1170,231 @@ export function PlatformApp() {
                 className="!rounded-lg"
               />
             </label>
-            <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
-              Pass threshold %
-              <Input
-                value={examForm.passThresholdPercent}
-                onChange={(event) =>
-                  setExamForm((current) => ({
-                    ...current,
-                    passThresholdPercent: event.target.value,
-                  }))
-                }
-                placeholder="70"
-                size="large"
-                className="!rounded-lg"
-              />
-            </label>
           </div>
 
-          {questions.map((question, index) => (
-            <div
-              key={`drawer-question-${index}`}
-              className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)]/70 p-4"
-            >
-              <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
-                Question {index + 1}
-                <Input
-                  value={question.prompt}
-                  onChange={(event) =>
-                    setQuestions((current) =>
-                      current.map((item, itemIndex) =>
-                        itemIndex === index
-                          ? { ...item, prompt: event.target.value }
-                          : item,
-                      ),
-                    )
-                  }
-                  placeholder="Enter question prompt"
-                  size="large"
-                  className="!rounded-lg"
-                />
-              </label>
-              <label className="mt-3 grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
-                Options
-                <TextArea
-                  value={question.options}
-                  onChange={(event) =>
-                    setQuestions((current) =>
-                      current.map((item, itemIndex) =>
-                        itemIndex === index
-                          ? { ...item, options: event.target.value }
-                          : item,
-                      ),
-                    )
-                  }
-                  placeholder="One option per line"
-                  autoSize={{ minRows: 4, maxRows: 7 }}
-                  className="!rounded-lg"
-                />
-              </label>
-              <label className="mt-3 grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
-                Correct option index
-                <Input
-                  type="number"
-                  min={0}
-                  value={String(question.correctOptionIndex)}
-                  onChange={(event) =>
-                    setQuestions((current) =>
-                      current.map((item, itemIndex) =>
-                        itemIndex === index
-                          ? {
-                              ...item,
-                              correctOptionIndex: Number(event.target.value),
-                            }
-                          : item,
-                      ),
-                    )
-                  }
-                  size="large"
-                  className="!rounded-lg"
-                />
-              </label>
+          <div className="grid gap-3 rounded-xl border border-[var(--border)] bg-white p-4">
+            <div className="flex flex-wrap gap-2">
+              {[
+                { key: "manual", label: "Manual Input" },
+                { key: "upload", label: "Upload from Template" },
+                { key: "ai", label: "Generate with AI" },
+              ].map((mode) => (
+                <button
+                  key={mode.key}
+                  type="button"
+                  onClick={() => setExamCreationMode(mode.key as ExamCreationMode)}
+                  className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                    examCreationMode === mode.key
+                      ? "bg-[var(--primary)] text-white"
+                      : "border border-[var(--border)] bg-white text-[var(--primary)]"
+                  }`}
+                >
+                  {mode.label}
+                </button>
+              ))}
             </div>
-          ))}
+
+            {examCreationMode === "manual" ? (
+              <div className="rounded-xl bg-[var(--surface-muted)] p-4 text-sm leading-6 text-[#46666c]">
+                Add questions one by one. Every question must include option A, option B,
+                option C, and option D. Choose the correct answer with the select input.
+              </div>
+            ) : null}
+
+            {examCreationMode === "upload" ? (
+              <div className="grid gap-4">
+                <div className="flex flex-wrap items-center gap-3">
+                  <a
+                    href="/exam-question-template.txt"
+                    download
+                    className="rounded-lg border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--primary)] transition hover:border-[var(--primary)] hover:bg-[var(--primary-soft)]"
+                  >
+                    Download Template
+                  </a>
+                  <label className="rounded-lg border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--primary)] transition hover:border-[var(--primary)] hover:bg-[var(--primary-soft)]">
+                    Upload Filled Template
+                    <input
+                      type="file"
+                      accept=".txt,.md"
+                      onChange={(event) => void handleUploadTemplateFile(event)}
+                      className="hidden"
+                    />
+                  </label>
+                  {uploadTemplateFileName ? (
+                    <span className="text-sm text-[#5a787d]">{uploadTemplateFileName}</span>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {examCreationMode === "ai" ? (
+              <div className="grid gap-4">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
+                    Number of questions
+                    <Input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={aiConfig.questionCount}
+                      onChange={(event) =>
+                        setAiConfig((current) => ({
+                          ...current,
+                          questionCount: event.target.value,
+                        }))
+                      }
+                      size="large"
+                      className="!rounded-lg"
+                    />
+                  </label>
+                  <div className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
+                    <span>Lecture notes file</span>
+                    <label className="cursor-pointer rounded-lg border border-[var(--border)] bg-white px-4 py-3 text-sm font-medium text-[var(--primary)]">
+                      {aiConfig.lectureNotesFileName || "Upload lecture notes (.txt or .md)"}
+                      <input
+                        type="file"
+                        accept=".txt,.md"
+                        onChange={(event) => void handleLectureNotesFile(event)}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                </div>
+                <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
+                  Additional AI context
+                  <TextArea
+                    value={aiConfig.additionalContext}
+                    onChange={(event) =>
+                      setAiConfig((current) => ({
+                        ...current,
+                        additionalContext: event.target.value,
+                      }))
+                    }
+                    placeholder="Add the difficulty level, focus areas, or any instructions for the AI."
+                    autoSize={{ minRows: 4, maxRows: 8 }}
+                    className="!rounded-lg"
+                  />
+                </label>
+                <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
+                  Lecture notes preview
+                  <TextArea
+                    value={aiConfig.lectureNotesText}
+                    onChange={(event) =>
+                      setAiConfig((current) => ({
+                        ...current,
+                        lectureNotesText: event.target.value,
+                      }))
+                    }
+                    placeholder="Paste lecture notes here if you prefer not to upload a file."
+                    autoSize={{ minRows: 8, maxRows: 16 }}
+                    className="!rounded-lg"
+                  />
+                </label>
+                <div className="flex justify-end">
+                  <Button
+                    type="default"
+                    loading={isGeneratingQuestions}
+                    onClick={() => void handleGenerateQuestionsWithAi()}
+                    className="!h-auto !rounded-lg !border-[var(--border)] !px-5 !py-2.5 !font-semibold !text-[var(--primary)] !shadow-none"
+                  >
+                    Generate Questions with AI
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="grid gap-4">
+            {questions.map((question, index) => (
+              <div
+                key={`drawer-question-${index}`}
+                className="rounded-xl border border-[var(--border)] bg-[var(--surface-muted)]/70 p-4"
+              >
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--primary)]">
+                    Question {index + 1}
+                  </p>
+                  {questions.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setQuestions((current) =>
+                          current.filter((_, questionIndex) => questionIndex !== index),
+                        )
+                      }
+                      className="text-sm font-semibold text-[#9a3d3d]"
+                    >
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
+                <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
+                  Question prompt
+                  <Input
+                    value={question.prompt}
+                    onChange={(event) =>
+                      updateQuestion(index, (current) => ({
+                        ...current,
+                        prompt: event.target.value,
+                      }))
+                    }
+                    placeholder="Enter question prompt"
+                    size="large"
+                    className="!rounded-lg"
+                  />
+                </label>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {OPTION_KEYS.map((optionKey) => (
+                    <label
+                      key={`question-${index}-option-${optionKey}`}
+                      className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]"
+                    >
+                      Option {optionKey}
+                      <Input
+                        value={question.options[optionKey]}
+                        onChange={(event) =>
+                          updateQuestion(index, (current) => ({
+                            ...current,
+                            options: {
+                              ...current.options,
+                              [optionKey]: event.target.value,
+                            },
+                          }))
+                        }
+                        placeholder={`Enter option ${optionKey}`}
+                        size="large"
+                        className="!rounded-lg"
+                      />
+                    </label>
+                  ))}
+                </div>
+                <label className="mt-4 grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
+                  Correct answer
+                  <select
+                    value={question.correctOptionKey}
+                    onChange={(event) =>
+                      updateQuestion(index, (current) => ({
+                        ...current,
+                        correctOptionKey: event.target.value as OptionKey,
+                      }))
+                    }
+                    className="rounded-lg border border-[var(--border)] bg-white px-4 py-3 text-sm outline-none transition focus:border-[var(--primary)]"
+                  >
+                    {OPTION_KEYS.map((optionKey) => (
+                      <option key={`answer-${index}-${optionKey}`} value={optionKey}>
+                        Option {optionKey}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            ))}
+          </div>
 
           <div className="flex flex-wrap justify-between gap-3">
             <Button
               type="default"
-              onClick={() =>
-                setQuestions((current) => [
-                  ...current,
-                  {
-                    prompt: "",
-                    options: "Option A\nOption B",
-                    correctOptionIndex: 0,
-                  },
-                ])
-              }
+              onClick={() => setQuestions((current) => [...current, createEmptyQuestionInput()])}
               className="!h-auto !rounded-lg !border-[var(--border)] !px-5 !py-2.5 !font-semibold !text-[var(--primary)] !shadow-none"
             >
               Add Question

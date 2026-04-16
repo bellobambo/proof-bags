@@ -1,15 +1,17 @@
 import { model, models, Schema, type InferSchemaType, Types } from "mongoose";
 
+import { OPTION_KEYS } from "@/lib/exam-questions";
+
 const answerSchema = new Schema(
   {
     questionId: {
       type: String,
       required: true,
     },
-    selectedOptionIndex: {
-      type: Number,
+    selectedOptionKey: {
+      type: String,
       required: true,
-      min: 0,
+      enum: OPTION_KEYS,
     },
   },
   {

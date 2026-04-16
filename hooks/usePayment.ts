@@ -66,7 +66,16 @@ export function usePayment() {
       transaction.recentBlockhash = blockhash;
 
       const result = await params.wallet.signAndSendTransaction(transaction);
+      console.log("[payment] submitted transaction", {
+        signature: result.signature,
+        studentWallet: params.studentWallet,
+        amountTokens: params.amountTokens,
+        recentBlockhash: blockhash,
+      });
       await connection.confirmTransaction(result.signature, "confirmed");
+      console.log("[payment] confirmed transaction", {
+        signature: result.signature,
+      });
 
       return result.signature;
     } catch (caughtError) {
