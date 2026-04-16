@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { AntdRegistry } from "@ant-design/nextjs-registry";
 
+import { AppToaster } from "@/components/app-toaster";
 import { WalletSessionProvider } from "@/components/wallet-session-provider";
 
 import "./globals.css";
@@ -19,7 +20,10 @@ export default function RootLayout({
     <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col bg-[var(--background)] font-sans text-[var(--foreground)]">
         <AntdRegistry>
-          <WalletSessionProvider>{children}</WalletSessionProvider>
+          <WalletSessionProvider>
+            {children}
+            <AppToaster />
+          </WalletSessionProvider>
         </AntdRegistry>
       </body>
     </html>

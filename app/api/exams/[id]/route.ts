@@ -45,17 +45,16 @@ export async function GET(
       return errorResponse("Only the tutor who created this exam can open it.", 403);
     }
 
-    const canViewAnswers = walletAddress === exam.tutorWallet;
-    const unlocked = canViewAnswers
-      ? true
-      : await hasExamAccess({ examId: exam._id, walletAddress });
-
     const latestSubmission = walletAddress
       ? await Submission.findOne({
           examId: exam._id,
           studentWallet: walletAddress,
         }).sort({ createdAt: -1 })
       : null;
+    const canViewAnswers = walletAddress === exam.tutorWallet || Boolean(latestSubmission);
+    const unlocked = canViewAnswers
+      ? true
+      : await hasExamAccess({ examId: exam._id, walletAddress });
 
     return successResponse({
       exam: serializeExam(exam, { includeAnswers: canViewAnswers }),

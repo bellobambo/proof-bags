@@ -5,8 +5,8 @@ import { connectToDatabase } from "@/lib/db";
 import { errorResponse, normalizeWalletAddress, successResponse } from "@/lib/api";
 import { serializePayment } from "@/lib/serializers";
 import {
+  getTokenAccountForOwner,
   getPlatformTreasuryTokenAccount,
-  payoutTokens,
   validateTokenMintDecimals,
   verifyStudentPayment,
 } from "@/lib/solana";
@@ -53,17 +53,20 @@ export async function POST(request: Request) {
     await verifyStudentPayment({
       signature,
       studentWallet,
-      expectedRecipientTokenAccount: getPlatformTreasuryTokenAccount().toBase58(),
-      expectedAmountTokens: exam.tokenPrice,
+      expectedTransfers: [
+        {
+          recipientTokenAccount: getTokenAccountForOwner(exam.tutorWallet).toBase58(),
+          amountTokens: Number((exam.tokenPrice * 0.7).toFixed(9)),
+        },
+        {
+          recipientTokenAccount: getPlatformTreasuryTokenAccount().toBase58(),
+          amountTokens: Number((exam.tokenPrice * 0.3).toFixed(9)),
+        },
+      ],
     });
 
     const tutorShareTokens = Number((exam.tokenPrice * 0.7).toFixed(9));
     const platformShareTokens = Number((exam.tokenPrice - tutorShareTokens).toFixed(9));
-    const tutorPayoutSignature =
-      (await payoutTokens({
-        recipientWallet: exam.tutorWallet,
-        amountTokens: tutorShareTokens,
-      })) ?? "";
 
     const payment = await Payment.create({
       examId: exam._id,
@@ -74,7 +77,6 @@ export async function POST(request: Request) {
       amountTokens: exam.tokenPrice,
       tutorShareTokens,
       platformShareTokens,
-      tutorPayoutSignature,
       status: "verified",
     });
 

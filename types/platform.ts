@@ -39,6 +39,7 @@ export type Exam = {
   questions: ExamQuestion[];
   createdAt: string;
   updatedAt: string;
+  latestSubmission?: Submission | null;
 };
 
 export type Submission = {

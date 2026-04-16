@@ -32,9 +32,13 @@ export function getPlatformTreasuryPublicKey() {
 }
 
 export function getPlatformTreasuryTokenAccount() {
+  return getTokenAccountForOwner(getPlatformTreasuryPublicKey().toBase58());
+}
+
+export function getTokenAccountForOwner(walletAddress: string) {
   return getAssociatedTokenAddressSync(
     getTokenMintPublicKey(),
-    getPlatformTreasuryPublicKey(),
+    new PublicKey(walletAddress),
   );
 }
 
@@ -74,8 +78,10 @@ export async function getTokenBalance(walletAddress: string) {
 export async function verifyStudentPayment(params: {
   signature: string;
   studentWallet: string;
-  expectedRecipientTokenAccount: string;
-  expectedAmountTokens: number;
+  expectedTransfers: Array<{
+    recipientTokenAccount: string;
+    amountTokens: number;
+  }>;
 }) {
   const connection = getSolanaConnection();
   const transaction = await connection.getParsedTransaction(params.signature, {
@@ -92,40 +98,45 @@ export async function verifyStudentPayment(params: {
   }
 
   const mintAddress = getTokenMintPublicKey().toBase58();
-  const expectedBaseUnits = parseTokenAmountToBaseUnits(
-    params.expectedAmountTokens,
-    getServerEnv().tokenDecimals,
-  );
-
-  const matchedInstruction = getParsedTransferInstructions(transaction).find(
-    (instruction) => {
-      const info = instruction.parsed.info as {
+  const parsedTransfers = getParsedTransferInstructions(transaction).map((instruction) => {
+    const info = instruction.parsed.info as {
+      amount?: string;
+      authority?: string;
+      destination?: string;
+      mint?: string;
+      multisigAuthority?: string;
+      owner?: string;
+      tokenAmount?: {
         amount?: string;
-        authority?: string;
-        destination?: string;
-        mint?: string;
-        multisigAuthority?: string;
-        owner?: string;
-        tokenAmount?: {
-          amount?: string;
-        };
       };
-      const amount = info.tokenAmount?.amount ?? info.amount ?? "0";
-      const destination = info.destination;
-      const authority = info.authority ?? info.multisigAuthority ?? info.owner;
-      const mint = info.mint;
+    };
 
-        return (
-          mint === mintAddress &&
-        destination === params.expectedRecipientTokenAccount &&
-        authority === params.studentWallet &&
-        BigInt(amount) >= expectedBaseUnits
+    return {
+      amount: BigInt(info.tokenAmount?.amount ?? info.amount ?? "0"),
+      authority: info.authority ?? info.multisigAuthority ?? info.owner ?? "",
+      destination: info.destination ?? "",
+      mint: info.mint ?? "",
+    };
+  });
+
+  const missingTransfer = params.expectedTransfers.find((expectedTransfer) => {
+    const expectedBaseUnits = parseTokenAmountToBaseUnits(
+      expectedTransfer.amountTokens,
+      getServerEnv().tokenDecimals,
+    );
+
+    return !parsedTransfers.some((transfer) => {
+      return (
+        transfer.mint === mintAddress &&
+        transfer.destination === expectedTransfer.recipientTokenAccount &&
+        transfer.authority === params.studentWallet &&
+        transfer.amount >= expectedBaseUnits
       );
-    },
-  );
+    });
+  });
 
-  if (!matchedInstruction) {
-    throw new Error("Transaction does not match the required token payment.");
+  if (missingTransfer) {
+    throw new Error("Transaction does not match the required split token payment.");
   }
 
   return transaction;

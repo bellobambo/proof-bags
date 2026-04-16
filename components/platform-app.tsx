@@ -21,12 +21,26 @@ import {
   type ExamQuestionInput,
   type OptionKey,
 } from "@/lib/exam-questions";
-import type { Course, Exam, PlatformUser, UserRole } from "@/types/platform";
+import type { Course, Exam, PlatformUser, Submission, UserRole } from "@/types/platform";
 import type { SolanaProvider } from "@/types/wallet";
 
 type QuestionDraft = ExamQuestionInput;
 type ExamCreationMode = "manual" | "upload" | "ai";
 const BAGS_TOKEN_URL = "https://bags.fm/$BELLOBAMBO";
+const PAYMENT_VERIFY_RETRY_COUNT = 12;
+const PAYMENT_VERIFY_RETRY_DELAY_MS = 2_000;
+
+function formatSubmissionScore(submission?: {
+  scorePercent: number;
+  correctAnswers: number;
+  totalQuestions: number;
+} | null) {
+  if (!submission) {
+    return "";
+  }
+
+  return `${submission.scorePercent}% (${submission.correctAnswers}/${submission.totalQuestions})`;
+}
 
 function formatWalletAddress(walletAddress: string) {
   if (walletAddress.length <= 10) {
@@ -42,6 +56,12 @@ function getWalletProvider(): SolanaProvider | null {
   }
 
   return window.phantom?.solana ?? window.solana ?? null;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function registerUser(payload: {
@@ -74,12 +94,16 @@ function formatTokenBalance(amountRaw: string, decimals: number) {
 
   const paddedRaw = normalizedRaw.padStart(decimals + 1, "0");
   const whole = paddedRaw.slice(0, -decimals) || "0";
-  const fraction = paddedRaw.slice(-decimals).padEnd(Math.max(decimals, 12), "0");
+  const fraction = paddedRaw.slice(-decimals).slice(0, 4);
 
-  return `${whole}.${fraction}`;
+  return fraction ? `${whole}.${fraction}` : whole;
 }
 
-async function fetchExamList(filters?: { courseId?: string; tutorWallet?: string }) {
+async function fetchExamList(filters?: {
+  courseId?: string;
+  tutorWallet?: string;
+  walletAddress?: string;
+}) {
   const search = new URLSearchParams();
 
   if (filters?.courseId) {
@@ -88,6 +112,10 @@ async function fetchExamList(filters?: { courseId?: string; tutorWallet?: string
 
   if (filters?.tutorWallet) {
     search.set("tutorWallet", filters.tutorWallet);
+  }
+
+  if (filters && "walletAddress" in filters && filters.walletAddress) {
+    search.set("walletAddress", filters.walletAddress);
   }
 
   const suffix = search.toString() ? `?${search.toString()}` : "";
@@ -159,7 +187,9 @@ export function PlatformApp() {
   const [enrolledCourseIds, setEnrolledCourseIds] = useState<string[]>([]);
   const [examUnlocked, setExamUnlocked] = useState(false);
   const [latestScore, setLatestScore] = useState("");
+  const [latestSubmission, setLatestSubmission] = useState<Submission | null>(null);
   const [paymentSignature, setPaymentSignature] = useState("");
+  const [isReviewMode, setIsReviewMode] = useState(false);
   const [tokenBalanceDisplay, setTokenBalanceDisplay] = useState("Unavailable");
   const [statusMessage, setStatusMessage] = useState("");
   const [isActionsDrawerOpen, setIsActionsDrawerOpen] = useState(false);
@@ -234,7 +264,9 @@ export function PlatformApp() {
       }
 
       try {
-        const exams = await fetchExamList();
+        const exams = await fetchExamList({
+          walletAddress: activeRole === "student" ? walletAddress ?? undefined : undefined,
+        });
         if (active) {
           setAllExams(exams);
         }
@@ -248,7 +280,7 @@ export function PlatformApp() {
     return () => {
       active = false;
     };
-  }, [isExamsPage, isRegistered]);
+  }, [activeRole, isExamsPage, isRegistered, walletAddress]);
 
   useEffect(() => {
     let active = true;
@@ -534,16 +566,23 @@ export function PlatformApp() {
     setStatusMessage(`Exam created. ID: ${exam.id}`);
   }
 
-  async function loadExam(examId: string) {
+  async function loadExam(examId: string, options?: { reviewMode?: boolean }) {
     const data = await fetchExam(examId, walletAddress || undefined);
     setSelectedExam(data.exam);
     setExamUnlocked(data.unlocked);
-    setLatestScore(
-      data.latestSubmission
-        ? `${data.latestSubmission.scorePercent}% (${data.latestSubmission.correctAnswers}/${data.latestSubmission.totalQuestions})`
-        : "",
+    setLatestSubmission(data.latestSubmission);
+    setLatestScore(formatSubmissionScore(data.latestSubmission));
+    setIsReviewMode(Boolean(options?.reviewMode && data.latestSubmission));
+    setStudentAnswers(
+      options?.reviewMode && data.latestSubmission
+        ? Object.fromEntries(
+            data.latestSubmission.answers.map((answer) => [
+              answer.questionId,
+              answer.selectedOptionKey,
+            ]),
+          )
+        : {},
     );
-    setStudentAnswers({});
     setIsExamDrawerOpen(true);
   }
 
@@ -563,15 +602,36 @@ export function PlatformApp() {
       wallet: provider,
       studentWallet: walletAddress,
       amountTokens: selectedExam.tokenPrice,
+      tutorWallet: selectedExam.tutorWallet,
     });
 
     setPaymentSignature(signature);
+    setStatusMessage("Payment submitted. Verifying on-chain transfer...");
 
-    await verifyPayment({
-      examId: selectedExam.id,
-      studentWallet: walletAddress,
-      signature,
-    });
+    let verified = false;
+    let lastVerifyError: Error | null = null;
+
+    for (let attempt = 0; attempt < PAYMENT_VERIFY_RETRY_COUNT; attempt += 1) {
+      try {
+        await verifyPayment({
+          examId: selectedExam.id,
+          studentWallet: walletAddress,
+          signature,
+        });
+        verified = true;
+        break;
+      } catch (caughtError) {
+        lastVerifyError =
+          caughtError instanceof Error
+            ? caughtError
+            : new Error("Unable to verify payment.");
+        await sleep(PAYMENT_VERIFY_RETRY_DELAY_MS);
+      }
+    }
+
+    if (!verified) {
+      throw lastVerifyError ?? new Error("Unable to verify payment.");
+    }
 
     setExamUnlocked(true);
     setStatusMessage("Payment verified. Exam unlocked.");
@@ -627,15 +687,45 @@ export function PlatformApp() {
       studentWallet: walletAddress,
       answers,
     });
+    const reviewedExam = await fetchExam(selectedExam.id, walletAddress);
 
-    setLatestScore(
-      `${result.submission.scorePercent}% (${result.submission.correctAnswers}/${result.submission.totalQuestions})`,
+    setLatestSubmission(result.submission);
+    setLatestScore(formatSubmissionScore(result.submission));
+    setSelectedExam({
+      ...reviewedExam.exam,
+      latestSubmission: result.submission,
+    });
+    setExamUnlocked(reviewedExam.unlocked);
+    setStudentAnswers(
+      Object.fromEntries(
+        result.submission.answers.map((answer) => [answer.questionId, answer.selectedOptionKey]),
+      ),
+    );
+    setIsReviewMode(true);
+    setSelectedExam((current) =>
+      current
+        ? {
+            ...current,
+            latestSubmission: result.submission,
+          }
+        : current,
+    );
+    setAllExams((current) =>
+      current.map((exam) =>
+        exam.id === selectedExam.id
+          ? {
+              ...exam,
+              latestSubmission: result.submission,
+            }
+          : exam,
+      ),
     );
     setStatusMessage(
       result.reward.eligible
         ? `Exam submitted. Reward sent: ${result.reward.amountTokens} tokens.`
         : "Exam submitted.",
     );
+    window.location.reload();
   }
 
   if (!hydrated) {
@@ -678,7 +768,7 @@ export function PlatformApp() {
                 </span>
                 {walletAddress ? (
                   <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-2 text-sm text-[#46666c]">
-                    BAGS balance: {tokenBalanceDisplay}
+                     {tokenBalanceDisplay} $BFORBAMBO
                   </div>
                 ) : null}
               </>
@@ -882,11 +972,13 @@ export function PlatformApp() {
                   const isStudentEnrolled = enrolledCourseIds.includes(exam.courseId);
                   const isTutorOwner = exam.tutorWallet === walletAddress;
                   const isTutorBlocked = activeRole === "tutor" && !isTutorOwner;
+                  const hasSubmittedExam = Boolean(exam.latestSubmission);
+                  const cardLatestScore = formatSubmissionScore(exam.latestSubmission);
                   const buttonLabel =
                     activeRole === "student"
                       ? isStudentEnrolled
-                        ? "Take Exam"
-                        : "Enroll to Take"
+                          ? "Take Exam"
+                          : "Enroll to Take"
                       : isTutorOwner
                         ? "Open Exam"
                         : "Only Creator Can Open";
@@ -907,20 +999,36 @@ export function PlatformApp() {
                       </p>
                       <p className="mt-3 text-sm leading-6 text-[#46666c]">{exam.description}</p>
                       <p className="mt-3 text-xs uppercase tracking-[0.22em] text-[#5a787d]">
-                        {relatedCourse?.title || "Course"} • Access fee: {exam.tokenPrice} token(s)
+                        Access fee: {exam.tokenPrice} $BFORBAMBO
                       </p>
+                      {cardLatestScore ? (
+                        <p className="mt-3 text-sm text-[#46666c]">
+                           Score: {cardLatestScore}
+                        </p>
+                      ) : null}
           
-                      <div className="mt-5">
-                        <button
-                          type="button"
-                          onClick={() => void loadExam(exam.id)}
-                          disabled={
-                            (activeRole === "student" && !isStudentEnrolled) || isTutorBlocked
-                          }
-                          className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--primary-strong)] disabled:cursor-not-allowed disabled:bg-[#9ab3b8]"
-                        >
-                          {buttonLabel}
-                        </button>
+                      <div className="mt-5 flex flex-wrap gap-3">
+                        {!(activeRole === "student" && hasSubmittedExam) ? (
+                          <button
+                            type="button"
+                            onClick={() => void loadExam(exam.id)}
+                            disabled={
+                              (activeRole === "student" && !isStudentEnrolled) || isTutorBlocked
+                            }
+                            className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--primary-strong)] disabled:cursor-not-allowed disabled:bg-[#9ab3b8]"
+                          >
+                            {buttonLabel}
+                          </button>
+                        ) : null}
+                        {activeRole === "student" && exam.latestSubmission ? (
+                          <button
+                            type="button"
+                            onClick={() => void loadExam(exam.id, { reviewMode: true })}
+                            className="rounded-lg border border-[var(--primary)] bg-white px-4 py-2 text-sm font-semibold text-[var(--primary)] transition hover:bg-[var(--primary-soft)]"
+                          >
+                            View Past Questions
+                          </button>
+                        ) : null}
                       </div>
                     </article>
                   );
@@ -971,9 +1079,6 @@ export function PlatformApp() {
             Buy token on Bags
           </a>
           <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[#46666c]">
-            Selected course: {selectedCourseTitle || "None"}
-          </div>
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[#46666c]">
             Token balance: {tokenBalanceDisplay}
           </div>
           {statusMessage ? (
@@ -989,7 +1094,7 @@ export function PlatformApp() {
           selectedExam ? (
             <div>
               <p className="text-xs uppercase tracking-[0.22em] text-[var(--primary)]">
-                Access fee: {selectedExam.tokenPrice} token(s)
+                Access fee: {selectedExam.tokenPrice} $BFORBAMBO
               </p>
               <h2 className="mt-2 text-2xl font-semibold text-[var(--primary-strong)]">
                 {selectedExam.title}
@@ -1012,8 +1117,13 @@ export function PlatformApp() {
                 Access: {isTutorViewingOwnExam ? "Creator preview" : examUnlocked ? "Unlocked" : "Payment required"}
               </p>
               <p className="text-sm text-[#46666c]">
-                Latest score: {latestScore || "No submission yet"}
+                 Score: {latestScore || "No submission yet"}
               </p>
+              {activeRole === "student" && latestSubmission ? (
+                <p className="mt-1 text-sm text-[#46666c]">
+                  Mode: Reviewing past submission
+                </p>
+              ) : null}
             </div>
 
             {!examUnlocked && !isTutorViewingOwnExam ? (
@@ -1063,11 +1173,26 @@ export function PlatformApp() {
                     </p>
                     <div className="mt-3 grid gap-2">
                       {OPTION_KEYS.map((optionKey) => (
+                        (() => {
+                          const selectedOption = studentAnswers[question.id];
+                          const isSelected = selectedOption === optionKey;
+                          const isCorrect = question.correctOptionKey === optionKey;
+                          const reviewClass = isReviewMode
+                            ? isCorrect
+                              ? "border-green-600 bg-green-50 text-green-900"
+                              : isSelected
+                                ? "border-red-500 bg-red-50 text-red-900"
+                                : "border-[var(--border)] text-[#35575d]"
+                            : isSelected
+                              ? "border-[var(--primary)] bg-[var(--primary)] text-white"
+                              : "border-[var(--border)] text-[#35575d] hover:border-[var(--primary)]";
+
+                          return (
                         <button
                           key={`${question.id}-${optionKey}`}
                           type="button"
                           onClick={
-                            isTutorViewingOwnExam
+                            isTutorViewingOwnExam || isReviewMode
                               ? undefined
                               : () =>
                                   setStudentAnswers((current) => ({
@@ -1075,28 +1200,63 @@ export function PlatformApp() {
                                     [question.id]: optionKey,
                                   }))
                           }
-                          disabled={isTutorViewingOwnExam}
-                          className={`rounded-lg border px-4 py-3 text-left transition ${
-                            studentAnswers[question.id] === optionKey
-                              ? "border-[var(--primary)] bg-[var(--primary)] text-white"
-                              : "border-[var(--border)] text-[#35575d] hover:border-[var(--primary)]"
-                          } ${isTutorViewingOwnExam ? "cursor-default hover:border-[var(--border)] disabled:opacity-100" : ""}`}
+                          disabled={isTutorViewingOwnExam || isReviewMode}
+                          className={`rounded-lg border px-4 py-3 text-left transition ${reviewClass} ${
+                            isTutorViewingOwnExam || isReviewMode
+                              ? "cursor-default hover:border-current disabled:opacity-100"
+                              : ""
+                          }`}
                         >
                           <span className="font-semibold">{optionKey}.</span>{" "}
                           {question.options[optionKey]}
+                          {isReviewMode && isSelected ? (
+                            <span className="ml-2 text-xs font-semibold uppercase tracking-[0.14em]">
+                              Your answer
+                            </span>
+                          ) : null}
+                          {isReviewMode && isCorrect ? (
+                            <span className="ml-2 text-xs font-semibold uppercase tracking-[0.14em]">
+                              Correct
+                            </span>
+                          ) : null}
                         </button>
+                          );
+                        })()
                       ))}
                     </div>
                   </div>
                 ))}
                 {!isTutorViewingOwnExam ? (
-                  <button
-                    type="button"
-                    onClick={() => void handleSubmitExam()}
-                    className="rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-white transition hover:bg-[var(--primary-strong)]"
-                  >
-                    Submit Exam
-                  </button>
+                  <div className="flex flex-wrap gap-3">
+                    {!isReviewMode && !latestSubmission ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleSubmitExam()}
+                        className="rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-white transition hover:bg-[var(--primary-strong)]"
+                      >
+                        Submit Exam
+                      </button>
+                    ) : null}
+                    {latestSubmission ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsReviewMode(true);
+                          setStudentAnswers(
+                            Object.fromEntries(
+                              latestSubmission.answers.map((answer) => [
+                                answer.questionId,
+                                answer.selectedOptionKey,
+                              ]),
+                            ),
+                          );
+                        }}
+                        className="rounded-lg border border-[var(--primary)] bg-white px-5 py-3 font-semibold text-[var(--primary)] transition hover:bg-[var(--primary-soft)]"
+                      >
+                        View Past Questions
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             )}

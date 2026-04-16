@@ -58,6 +58,15 @@ export async function POST(
       return errorResponse("Payment verification is required before submission.", 403);
     }
 
+    const existingSubmission = await Submission.findOne({
+      examId: exam._id,
+      studentWallet,
+    }).lean();
+
+    if (existingSubmission) {
+      return errorResponse("You can only submit this exam once.", 409);
+    }
+
     const hasInvalidAnswer = answers.some(
       (answer: { selectedOptionKey: string }) =>
         typeof answer.selectedOptionKey !== "string"
