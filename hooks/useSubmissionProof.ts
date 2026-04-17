@@ -22,7 +22,7 @@ function createMemoInstruction(memo: string, signer: PublicKey) {
   return new TransactionInstruction({
     programId: MEMO_PROGRAM_ID,
     keys: [{ pubkey: signer, isSigner: true, isWritable: false }],
-    data: new TextEncoder().encode(memo),
+    data: Buffer.from(memo, "utf8"),
   });
 }
 
