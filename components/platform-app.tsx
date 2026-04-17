@@ -4,8 +4,10 @@ import { createElement } from "react";
 import { Button, Drawer, Input, Modal } from "antd";
 import toast from "react-hot-toast";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ChangeEvent } from "react";
+import mammoth from "mammoth";
 
 import { useCourses } from "@/hooks/useCourses";
 import { useCreateCourse } from "@/hooks/useCreateCourse";
@@ -24,7 +26,14 @@ import {
   type ExamQuestionInput,
   type OptionKey,
 } from "@/lib/exam-questions";
-import type { Course, Exam, PlatformUser, Submission, UserRole } from "@/types/platform";
+import type {
+  BagsTokenDetails,
+  Course,
+  Exam,
+  PlatformUser,
+  Submission,
+  UserRole,
+} from "@/types/platform";
 import type { SolanaProvider } from "@/types/wallet";
 
 type QuestionDraft = ExamQuestionInput;
@@ -116,6 +125,12 @@ async function fetchBalance(walletAddress: string) {
   }>(`/api/token/balance/${walletAddress}`);
 
   return data.balance;
+}
+
+async function fetchTokenDetails() {
+  const data = await apiFetch<{ tokenDetails: BagsTokenDetails }>("/api/bags/token-details");
+
+  return data.tokenDetails;
 }
 
 function formatTokenBalance(amountRaw: string, decimals: number) {
@@ -227,13 +242,15 @@ export function PlatformApp() {
   const [tokenBalanceDisplay, setTokenBalanceDisplay] = useState("Unavailable");
   const [statusMessage, setStatusMessage] = useState("");
   const [isActionsDrawerOpen, setIsActionsDrawerOpen] = useState(false);
+  const [tokenDetails, setTokenDetails] = useState<BagsTokenDetails | null>(null);
+  const [isTokenDetailsLoading, setIsTokenDetailsLoading] = useState(false);
+  const [tokenDetailsError, setTokenDetailsError] = useState("");
   const [isCreateCourseModalOpen, setIsCreateCourseModalOpen] = useState(false);
   const [isCreateExamDrawerOpen, setIsCreateExamDrawerOpen] = useState(false);
   const [isExamDrawerOpen, setIsExamDrawerOpen] = useState(false);
   const [isEnrollingCourseId, setIsEnrollingCourseId] = useState<string | null>(null);
   const [courseForm, setCourseForm] = useState({
     title: "",
-    description: "",
   });
   const [examForm, setExamForm] = useState({
     title: "",
@@ -251,6 +268,10 @@ export function PlatformApp() {
   });
   const [isGeneratingQuestions, setIsGeneratingQuestions] = useState(false);
   const [studentAnswers, setStudentAnswers] = useState<Record<string, OptionKey>>({});
+  const [isWalletActionLoading, setIsWalletActionLoading] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [isSubmittingExam, setIsSubmittingExam] = useState(false);
+  const [isLoadingExam, setIsLoadingExam] = useState(false);
   const isRegistered = Boolean(registeredUser);
   const activeRole = registeredUser?.role ?? role;
   const selectedCourseTitle = courses.find((course) => course.id === selectedCourseId)?.title;
@@ -285,6 +306,44 @@ export function PlatformApp() {
       active = false;
     };
   }, [walletAddress, paymentSignature]);
+
+  useEffect(() => {
+    let active = true;
+
+    if (!isActionsDrawerOpen) {
+      return () => {
+        active = false;
+      };
+    }
+
+    setIsTokenDetailsLoading(true);
+    setTokenDetailsError("");
+
+    void Promise.resolve().then(async () => {
+      try {
+        const details = await fetchTokenDetails();
+
+        if (active) {
+          setTokenDetails(details);
+        }
+      } catch (error) {
+        if (active) {
+          setTokenDetails(null);
+          setTokenDetailsError(
+            error instanceof Error ? error.message : "Unable to load token details.",
+          );
+        }
+      } finally {
+        if (active) {
+          setIsTokenDetailsLoading(false);
+        }
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [isActionsDrawerOpen]);
 
   useEffect(() => {
     let active = true;
@@ -346,6 +405,7 @@ export function PlatformApp() {
 
   async function handleConnectWallet() {
     try {
+      setIsWalletActionLoading(true);
       await connectWallet();
       setStatusMessage("Wallet connected.");
     } catch (error) {
@@ -354,23 +414,35 @@ export function PlatformApp() {
           ? error.message
           : "Wallet connection failed.",
       );
+    } finally {
+      setIsWalletActionLoading(false);
     }
   }
 
   async function handleWalletAction() {
     if (walletAddress) {
       try {
+        setIsWalletActionLoading(true);
         await disconnectWallet();
       } catch (error) {
         setStatusMessage(
           error instanceof Error ? error.message : "Wallet disconnect failed.",
         );
+      } finally {
+        setIsWalletActionLoading(false);
       }
 
       return;
     }
 
     await handleConnectWallet();
+  }
+
+  function handleCopyWalletAddress() {
+    if (walletAddress) {
+      void navigator.clipboard.writeText(walletAddress);
+      toast.success("Copied");
+    }
   }
 
   async function handleRegister() {
@@ -385,15 +457,20 @@ export function PlatformApp() {
       return;
     }
 
-    const user = await registerUser({
-      walletAddress,
-      role,
-      displayName: normalizedDisplayName,
-    });
+    try {
+      setIsRegistering(true);
+      const user = await registerUser({
+        walletAddress,
+        role,
+        displayName: normalizedDisplayName,
+      });
 
-    setRegisteredUser(user);
-    setDisplayName(normalizedDisplayName);
-    setStatusMessage("Registration complete.");
+      setRegisteredUser(user);
+      setDisplayName(normalizedDisplayName);
+      setStatusMessage("Registration complete.");
+    } finally {
+      setIsRegistering(false);
+    }
   }
 
   async function handleCreateCourse() {
@@ -403,7 +480,6 @@ export function PlatformApp() {
     }
 
     const title = courseForm.title.trim();
-    const description = courseForm.description.trim();
 
     if (!title) {
       setStatusMessage("Enter a course title.");
@@ -413,10 +489,10 @@ export function PlatformApp() {
     await createCourse({
       tutorWallet: walletAddress,
       title,
-      description,
+      description: "",
     });
 
-    setCourseForm({ title: "", description: "" });
+    setCourseForm({ title: "" });
     await refreshCourses();
     setIsCreateCourseModalOpen(false);
     setStatusMessage("Course created.");
@@ -519,12 +595,25 @@ export function PlatformApp() {
       return;
     }
 
-    const fileText = await file.text();
-    setAiConfig((current) => ({
-      ...current,
-      lectureNotesText: fileText,
-      lectureNotesFileName: file.name,
-    }));
+    try {
+      let fileText = "";
+
+      if (file.name.endsWith(".docx")) {
+        const arrayBuffer = await file.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        fileText = result.value;
+      } else {
+        fileText = await file.text();
+      }
+
+      setAiConfig((current) => ({
+        ...current,
+        lectureNotesText: fileText,
+        lectureNotesFileName: file.name,
+      }));
+    } catch {
+      setStatusMessage("Unable to read file. Please use .txt, .md, or .docx files.");
+    }
   }
 
   async function handleGenerateQuestionsWithAi() {
@@ -601,23 +690,28 @@ export function PlatformApp() {
   }
 
   async function loadExam(examId: string, options?: { reviewMode?: boolean }) {
-    const data = await fetchExam(examId, walletAddress || undefined);
-    setSelectedExam(data.exam);
-    setExamUnlocked(data.unlocked);
-    setLatestSubmission(data.latestSubmission);
-    setLatestScore(formatSubmissionScore(data.latestSubmission));
-    setIsReviewMode(Boolean(options?.reviewMode && data.latestSubmission));
-    setStudentAnswers(
-      options?.reviewMode && data.latestSubmission
-        ? Object.fromEntries(
-            data.latestSubmission.answers.map((answer) => [
-              answer.questionId,
-              answer.selectedOptionKey,
-            ]),
-          )
-        : {},
-    );
-    setIsExamDrawerOpen(true);
+    try {
+      setIsLoadingExam(true);
+      const data = await fetchExam(examId, walletAddress || undefined);
+      setSelectedExam(data.exam);
+      setExamUnlocked(data.unlocked);
+      setLatestSubmission(data.latestSubmission);
+      setLatestScore(formatSubmissionScore(data.latestSubmission));
+      setIsReviewMode(Boolean(options?.reviewMode && data.latestSubmission));
+      setStudentAnswers(
+        options?.reviewMode && data.latestSubmission
+          ? Object.fromEntries(
+              data.latestSubmission.answers.map((answer) => [
+                answer.questionId,
+                answer.selectedOptionKey,
+              ]),
+            )
+          : {},
+      );
+      setIsExamDrawerOpen(true);
+    } finally {
+      setIsLoadingExam(false);
+    }
   }
 
   async function handlePayAndVerify() {
@@ -711,6 +805,8 @@ export function PlatformApp() {
       return;
     }
 
+    setIsSubmittingExam(true);
+
     const answers = selectedExam.questions.map((question) => ({
       questionId: question.id,
       selectedOptionKey: studentAnswers[question.id],
@@ -791,6 +887,7 @@ export function PlatformApp() {
           ? `Exam submitted. Reward sent: ${result.reward.amountTokens} tokens. Score proof saved on-chain.`
           : "Exam submitted. Score proof saved on-chain.",
     );
+    setIsSubmittingExam(false);
     window.location.reload();
   }
 
@@ -829,7 +926,12 @@ export function PlatformApp() {
           <div className="flex flex-wrap items-center gap-2 lg:justify-end">
             {(isExamsPage || walletAddress || isRegistered) ? (
               <>
-                <span className="px-4 py-2">
+                <span
+                  onClick={() => handleCopyWalletAddress()}
+                  className="cursor-pointer rounded px-4 py-2 transition hover:bg-[var(--surface-muted)]"
+                  role="button"
+                  tabIndex={0}
+                >
                   {walletAddress ? formatWalletAddress(walletAddress) : "Not connected"}
                 </span>
                 {walletAddress ? (
@@ -845,21 +947,27 @@ export function PlatformApp() {
                 onClick={() => setIsActionsDrawerOpen(true)}
                 className="!h-auto !rounded-lg !border-[var(--border)] !px-4 !py-2 !font-medium !text-[var(--primary-strong)] !shadow-none"
               >
-                Open Drawer
+                Token Details
               </Button>
             ) : null}
             <button
               type="button"
               onClick={() => void handleWalletAction()}
-              className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--primary-strong)]"
+              disabled={isWalletActionLoading}
+              className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--primary-strong)] disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {walletAddress ? "Disconnect Wallet" : "Connect Wallet"}
+              {isWalletActionLoading ? (walletAddress ? "Disconnecting..." : "Connecting...") : (walletAddress ? "Disconnect Wallet" : "Connect Wallet")}
             </button>
           </div>
         </div>
       </header>
 
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-6 py-8 lg:px-10 lg:py-10">
+        {statusMessage ? (
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--primary-soft)] px-4 py-3 text-sm text-[var(--primary-strong)]">
+            {statusMessage}
+          </div>
+        ) : null}
         <section />
 
         {!isExamsPage ? (
@@ -869,9 +977,10 @@ export function PlatformApp() {
                 <button
                   type="button"
                   onClick={() => void handleConnectWallet()}
-                  className="rounded-lg bg-[var(--primary)] px-8 py-4 text-base font-semibold text-white transition hover:bg-[var(--primary-strong)]"
+                  disabled={isWalletActionLoading}
+                  className="rounded-lg bg-[var(--primary)] px-8 py-4 text-base font-semibold text-white transition hover:bg-[var(--primary-strong)] disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  Connect Wallet
+                  {isWalletActionLoading ? "Connecting..." : "Connect Wallet"}
                 </button>
               </Surface>
             ) : !isRegistered ? (
@@ -922,9 +1031,10 @@ export function PlatformApp() {
 
                     <button
                       type="submit"
-                      className="mt-2 rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-white transition hover:bg-[var(--primary-strong)]"
+                      disabled={isRegistering}
+                      className="mt-2 rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-white transition hover:bg-[var(--primary-strong)] disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      Register
+                      {isRegistering ? "Registering..." : "Register"}
                     </button>
                   </form>
                 </div>
@@ -1079,21 +1189,33 @@ export function PlatformApp() {
                             type="button"
                             onClick={() => void loadExam(exam.id)}
                             disabled={
-                              (activeRole === "student" && !isStudentEnrolled) || isTutorBlocked
+                              (activeRole === "student" && !isStudentEnrolled) || isTutorBlocked || isLoadingExam
                             }
                             className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--primary-strong)] disabled:cursor-not-allowed disabled:bg-[#9ab3b8]"
                           >
-                            {buttonLabel}
+                            {isLoadingExam ? "Loading..." : buttonLabel}
                           </button>
                         ) : null}
                         {activeRole === "student" && exam.latestSubmission ? (
-                          <button
-                            type="button"
-                            onClick={() => void loadExam(exam.id, { reviewMode: true })}
-                            className="rounded-lg border border-[var(--primary)] bg-white px-4 py-2 text-sm font-semibold text-[var(--primary)] transition hover:bg-[var(--primary-soft)]"
-                          >
-                            View Past Questions
-                          </button>
+                          <div className="flex justify-start gap-2 items-center">
+                            <button
+                              type="button"
+                              onClick={() => void loadExam(exam.id, { reviewMode: true })}
+                              className="rounded-lg border border-[var(--primary)] bg-white p-2 text-xs font-semibold text-[var(--primary)] transition hover:bg-[var(--primary-soft)]"
+                            >
+                              View Past Questions
+                            </button>
+                            {exam.latestSubmission?.scoreProofSignature ? (
+                              <a
+                                href={buildSolscanTxUrl(exam.latestSubmission.scoreProofSignature)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="rounded-lg bg-[var(--primary)] p-2 text-xs font-semibold text-white transition hover:bg-[var(--primary-strong)]"
+                              >
+                                View On Chain Proof
+                              </a>
+                            ) : null}
+                          </div>
                         ) : null}
                       </div>
                     </article>
@@ -1110,48 +1232,83 @@ export function PlatformApp() {
       </div>
 
       <Drawer
-        title="Quick actions"
+        title="Token details"
         placement="right"
         onClose={() => setIsActionsDrawerOpen(false)}
         open={isActionsDrawerOpen}
-        width={360}
+        width={460}
       >
         <div className="grid gap-6">
-          <Link
-            href="/exams"
-            onClick={() => setIsActionsDrawerOpen(false)}
-            className="rounded-lg border border-[var(--border)] bg-white px-4 py-3 text-sm font-medium text-[var(--primary-strong)] transition hover:border-[var(--primary)] hover:bg-[var(--primary-soft)]"
-          >
-            Open exam workspace
-          </Link>
-          {activeRole === "tutor" && !isExamsPage ? (
-            <button
-              type="button"
-              onClick={() => {
-                setIsActionsDrawerOpen(false);
-                setIsCreateCourseModalOpen(true);
-              }}
-              className="rounded-lg border border-[var(--border)] bg-white px-4 py-3 text-left text-sm font-medium text-[var(--primary-strong)] transition hover:border-[var(--primary)] hover:bg-[var(--primary-soft)]"
-            >
-              Create a new course
-            </button>
-          ) : null}
           <a
             href={BAGS_TOKEN_URL}
             target="_blank"
             rel="noreferrer"
-            className="rounded-lg border-2 border-[var(--primary)] bg-[var(--primary)] px-4 py-3 text-sm font-medium text-white transition hover:border-[var(--primary-strong)] hover:bg-[var(--primary-strong)]"
+            className="rounded-lg border-2 border-[var(--primary)] bg-white px-4 py-3 text-sm font-medium text-[var(--primary)] transition hover:border-[var(--primary-strong)] hover:bg-[var(--primary-soft)]"
           >
             Buy token on Bags
           </a>
-          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-3 text-sm text-[#46666c]">
-            Token balance: {tokenBalanceDisplay}
-          </div>
-          {statusMessage ? (
-            <div className="rounded-lg border border-[var(--border)] bg-[var(--primary-soft)] px-4 py-3 text-sm text-[var(--primary-strong)]">
-              {statusMessage}
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-[var(--primary)]">
+                  Token details
+                </p>
+                <p className="mt-1 text-sm text-[#46666c]">
+                  Live data from Bags
+                </p>
+              </div>
+              {isTokenDetailsLoading ? (
+                <span className="text-xs font-medium text-[#5a787d]">Loading...</span>
+              ) : null}
             </div>
-          ) : null}
+
+            {tokenDetailsError ? (
+              <div className="mt-4 rounded-lg border border-[var(--border)] bg-white px-3 py-3 text-sm text-[#9a3d3d]">
+                {tokenDetailsError}
+              </div>
+            ) : null}
+
+            {!isTokenDetailsLoading && !tokenDetailsError && tokenDetails?.entries.length ? (
+              <div className="mt-4 grid gap-3">
+                {tokenDetails.pfpUrl ? (
+                  <div className="rounded-lg border border-[var(--border)] bg-white px-3 py-3">
+                    <p className="text-xs uppercase tracking-[0.14em] text-[#5a787d]">
+                      Profile picture
+                    </p>
+                    <div className="mt-3">
+                      <Image
+                        src={tokenDetails.pfpUrl}
+                        alt="Bags token creator profile picture"
+                        width={72}
+                        height={72}
+                        unoptimized
+                        className="h-[72px] w-[72px] rounded-full border border-[var(--border)] object-cover"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+                {tokenDetails.entries.map((entry) => (
+                  <div
+                    key={entry.label}
+                    className="rounded-lg border border-[var(--border)] bg-white px-3 py-3"
+                  >
+                    <p className="text-xs uppercase tracking-[0.14em] text-[#5a787d]">
+                      {entry.label}
+                    </p>
+                    <p className="mt-1 break-words text-sm font-medium text-[var(--primary-strong)]">
+                      {entry.value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {!isTokenDetailsLoading && !tokenDetailsError && !tokenDetails?.entries.length ? (
+              <div className="mt-4 rounded-lg border border-[var(--border)] bg-white px-3 py-3 text-sm text-[#46666c]">
+                No token details available.
+              </div>
+            ) : null}
+          </div>
         </div>
       </Drawer>
 
@@ -1202,7 +1359,7 @@ export function PlatformApp() {
                     href={BAGS_TOKEN_URL}
                     target="_blank"
                     rel="noreferrer"
-                    className="rounded-lg border-2 border-[var(--primary)] bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition hover:border-[var(--primary-strong)] hover:bg-[var(--primary-strong)]"
+                    className="rounded-lg border border-[var(--primary)] bg-white px-3 py-1 text-sm font-semibold !text-[var(--primary)] transition hover:border-[var(--primary-strong)] hover:bg-[var(--primary-soft)]"
                   >
                     Buy on Bags
                   </a>
@@ -1210,7 +1367,7 @@ export function PlatformApp() {
                     type="button"
                     onClick={() => void handleSwapForExam()}
                     disabled={isSwapping}
-                    className="rounded-lg border border-[var(--primary)] bg-white px-4 py-2 text-sm font-semibold text-[var(--primary)] transition hover:bg-[var(--surface)] disabled:opacity-60"
+                    className="rounded-lg border border-[var(--primary)] bg-white px-3 py-1 text-sm font-semibold text-[var(--primary)] transition hover:bg-[var(--surface)] disabled:opacity-60"
                   >
                     {isSwapping ? "Swapping..." : "Swap Enough for Exam"}
                   </button>
@@ -1218,7 +1375,7 @@ export function PlatformApp() {
                     type="button"
                     onClick={() => void handlePayAndVerify()}
                     disabled={isPaying || isVerifying || isSwapping}
-                    className="rounded-lg bg-[var(--primary-strong)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[var(--primary)] disabled:opacity-60"
+                    className="rounded-lg bg-[var(--primary-strong)] px-3 py-1 text-sm font-semibold text-white transition hover:bg-[var(--primary)] disabled:opacity-60"
                   >
                     Pay and Unlock
                   </button>
@@ -1298,9 +1455,10 @@ export function PlatformApp() {
                       <button
                         type="button"
                         onClick={() => void handleSubmitExam()}
-                        className="rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-white transition hover:bg-[var(--primary-strong)]"
+                        disabled={isSubmittingExam}
+                        className="rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-white transition hover:bg-[var(--primary-strong)] disabled:opacity-60 disabled:cursor-not-allowed"
                       >
-                        Submit Exam
+                        {isSubmittingExam ? "Submitting..." : "Submit Exam"}
                       </button>
                     ) : null}
                     {latestSubmission ? (
@@ -1351,7 +1509,9 @@ export function PlatformApp() {
       >
         <div className="grid gap-4">
           <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
-            Exam title
+            <span>
+              Exam title <span className="text-red-500">*</span>
+            </span>
             <Input
               value={examForm.title}
               onChange={(event) =>
@@ -1366,7 +1526,9 @@ export function PlatformApp() {
             />
           </label>
           <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
-            Description
+            <span>
+              Description <span className="text-red-500">*</span>
+            </span>
             <TextArea
               value={examForm.description}
               onChange={(event) =>
@@ -1380,9 +1542,11 @@ export function PlatformApp() {
               className="!rounded-lg"
             />
           </label>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-4">
             <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
-              Exam access fee
+              <span>
+                Exam access fee <span className="text-red-500">*</span> ($B4BAMBO)
+              </span>
               <Input
                 value={examForm.tokenPrice}
                 onChange={(event) =>
@@ -1393,7 +1557,7 @@ export function PlatformApp() {
                 }
                 placeholder="5"
                 size="large"
-                className="!rounded-lg"
+                className="!rounded-lg !text-lg !py-3"
               />
             </label>
           </div>
@@ -1433,7 +1597,7 @@ export function PlatformApp() {
                   <a
                     href="/exam-question-template.txt"
                     download
-                    className="rounded-lg border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold text-[var(--primary)] transition hover:border-[var(--primary)] hover:bg-[var(--primary-soft)]"
+                    className="rounded-lg border border-[var(--border)] bg-white px-4 py-2 text-sm font-semibold !text-[var(--primary)] transition hover:border-[var(--primary)] hover:bg-[var(--primary-soft)]"
                   >
                     Download Template
                   </a>
@@ -1476,10 +1640,10 @@ export function PlatformApp() {
                   <div className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
                     <span>Lecture notes file</span>
                     <label className="cursor-pointer rounded-lg border border-[var(--border)] bg-white px-4 py-3 text-sm font-medium text-[var(--primary)]">
-                      {aiConfig.lectureNotesFileName || "Upload lecture notes (.txt or .md)"}
+                      {aiConfig.lectureNotesFileName || "Upload lecture notes (.txt, .md, or .docx)"}
                       <input
                         type="file"
-                        accept=".txt,.md"
+                        accept=".txt,.md,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         onChange={(event) => void handleLectureNotesFile(event)}
                         className="hidden"
                       />
@@ -1498,21 +1662,6 @@ export function PlatformApp() {
                     }
                     placeholder="Add the difficulty level, focus areas, or any instructions for the AI."
                     autoSize={{ minRows: 4, maxRows: 8 }}
-                    className="!rounded-lg"
-                  />
-                </label>
-                <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
-                  Lecture notes preview
-                  <TextArea
-                    value={aiConfig.lectureNotesText}
-                    onChange={(event) =>
-                      setAiConfig((current) => ({
-                        ...current,
-                        lectureNotesText: event.target.value,
-                      }))
-                    }
-                    placeholder="Paste lecture notes here if you prefer not to upload a file."
-                    autoSize={{ minRows: 8, maxRows: 16 }}
                     className="!rounded-lg"
                   />
                 </label>
@@ -1667,22 +1816,7 @@ export function PlatformApp() {
               }
               placeholder="Enter course title"
               size="large"
-              className="!rounded-lg"
-            />
-          </label>
-          <label className="grid gap-2 text-sm font-medium text-[var(--primary-strong)]">
-            Description
-            <TextArea
-              value={courseForm.description}
-              onChange={(event) =>
-                setCourseForm((current) => ({
-                  ...current,
-                  description: event.target.value,
-                }))
-              }
-              placeholder="Enter course description"
-              autoSize={{ minRows: 4, maxRows: 7 }}
-              className="!rounded-lg"
+              className="!rounded-lg !text-lg !py-3"
             />
           </label>
           <div className="flex justify-end">

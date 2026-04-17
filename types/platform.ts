@@ -124,6 +124,17 @@ export type BagsSwapForExamResponse = {
   routeVenues: string[];
 };
 
+export type BagsTokenDetailEntry = {
+  label: string;
+  value: string;
+};
+
+export type BagsTokenDetails = {
+  entries: BagsTokenDetailEntry[];
+  raw: Record<string, unknown> | null;
+  pfpUrl: string;
+};
+
 export type BagsTokenInsights = {
   enabled: boolean;
   tokenMint: string;

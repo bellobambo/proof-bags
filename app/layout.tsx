@@ -9,6 +9,14 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Proof Bags",
   description: "Token-gated course and assessment management on Solana with Bags.",
+  icons: {
+    icon: [
+      { url: "/favicon-16x16.png?v=2", sizes: "16x16", type: "image/png" },
+      { url: "/favicon-32x32.png?v=2", sizes: "32x32", type: "image/png" },
+      { url: "/favicon.ico?v=2", sizes: "any" },
+    ],
+    apple: "/apple-touch-icon.png?v=2",
+  },
 };
 
 export default function RootLayout({
