@@ -963,11 +963,7 @@ export function PlatformApp() {
       </header>
 
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-6 py-8 lg:px-10 lg:py-10">
-        {statusMessage ? (
-          <div className="rounded-xl border border-[var(--border)] bg-[var(--primary-soft)] px-4 py-3 text-sm text-[var(--primary-strong)]">
-            {statusMessage}
-          </div>
-        ) : null}
+   
         <section />
 
         {!isExamsPage ? (
