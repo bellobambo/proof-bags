@@ -52,6 +52,14 @@ const submissionSchema = new Schema(
       type: Number,
       default: 0,
     },
+    scoreProofMemo: {
+      type: String,
+      default: "",
+    },
+    scoreProofSignature: {
+      type: String,
+      default: "",
+    },
   },
   {
     timestamps: true,

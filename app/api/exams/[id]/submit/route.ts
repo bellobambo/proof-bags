@@ -10,7 +10,24 @@ import { normalizeStoredExamQuestion, OPTION_KEYS } from "@/lib/exam-questions";
 import { errorResponse, normalizeWalletAddress, successResponse } from "@/lib/api";
 import { getServerEnv } from "@/lib/env";
 import { serializeSubmission } from "@/lib/serializers";
-import { payoutTokens } from "@/lib/solana";
+import { buildExamSubmissionMemo, payoutTokens } from "@/lib/solana";
+
+async function dropLegacySubmissionIndex() {
+  try {
+    await Submission.collection.dropIndex("attestationTransactionSignature_1");
+  } catch (error) {
+    const indexMissing =
+      error instanceof Error
+      && "code" in error
+      && (error as Error & { code?: number }).code === 27;
+
+    if (!indexMissing) {
+      console.warn("[exam-submit] unable to drop legacy submission index", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
 
 export async function POST(
   request: Request,
@@ -31,6 +48,7 @@ export async function POST(
     }
 
     await connectToDatabase();
+    await dropLegacySubmissionIndex();
 
     const exam = await Exam.findById(id);
 
@@ -112,22 +130,44 @@ export async function POST(
       rewardTokens,
     });
 
+    const scoreProofMemo = buildExamSubmissionMemo({
+      examTitle: exam.title,
+      scorePercent,
+    });
+    submission.scoreProofMemo = scoreProofMemo;
+    await submission.save();
+
     let studentRewardSignature = "";
+    let rewardTransactionError = "";
 
     if (rewardTokens > 0) {
-      studentRewardSignature =
-        (await payoutTokens({
+      try {
+        studentRewardSignature =
+          (await payoutTokens({
           recipientWallet: studentWallet,
           amountTokens: rewardTokens,
         })) ?? "";
+      } catch (error) {
+        rewardTransactionError =
+          error instanceof Error ? error.message : "Unable to send reward transaction.";
+        console.error("[exam-submit] failed to send reward transaction", {
+          examId: exam._id.toString(),
+          studentWallet,
+          rewardTokens,
+          scorePercent,
+          error: rewardTransactionError,
+        });
+      }
     }
 
-    if (rewardTokens > 0) {
-      verifiedPayment.rewardTokens = rewardTokens;
-      verifiedPayment.studentRewardSignature = studentRewardSignature;
+    verifiedPayment.rewardTokens = rewardTokens;
+    verifiedPayment.studentRewardSignature = studentRewardSignature;
+
+    if (rewardTokens > 0 && studentRewardSignature) {
       verifiedPayment.status = "rewarded";
-      await verifiedPayment.save();
     }
+
+    await verifiedPayment.save();
 
     return successResponse({
       submission: serializeSubmission(submission),
@@ -135,6 +175,8 @@ export async function POST(
         eligible: rewardEligible,
         amountTokens: rewardTokens,
         transactionSignature: studentRewardSignature || null,
+        memo: scoreProofMemo,
+        error: rewardTransactionError || null,
       },
     });
   } catch (error) {
