@@ -1043,9 +1043,7 @@ export function PlatformApp() {
                     <h2 className="mt-3 text-2xl font-semibold text-[var(--primary-strong)]">
                       Available courses
                     </h2>
-                    <p className="mt-2 text-sm text-[#5a787d]">
-                      Browse the courses already fetched from the backend.
-                    </p>
+                
                   </div>
                   <div className="flex flex-wrap gap-3">
                     {activeRole === "tutor" ? (
