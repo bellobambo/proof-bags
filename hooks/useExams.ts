@@ -106,6 +106,8 @@ export function useExams() {
           eligible: boolean;
           amountTokens: number;
           transactionSignature: string | null;
+          memo: string;
+          error: string | null;
         };
       }>(`/api/exams/${payload.examId}/submit`, {
         method: "POST",

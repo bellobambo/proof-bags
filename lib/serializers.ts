@@ -88,6 +88,8 @@ export function serializeSubmission(
     totalQuestions: submission.totalQuestions,
     correctAnswers: submission.correctAnswers,
     rewardTokens: submission.rewardTokens,
+    scoreProofMemo: submission.scoreProofMemo,
+    scoreProofSignature: submission.scoreProofSignature,
     answers: submission.answers,
     createdAt: submission.createdAt,
     updatedAt: submission.updatedAt,

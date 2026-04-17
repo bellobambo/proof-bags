@@ -50,6 +50,8 @@ export type Submission = {
   totalQuestions: number;
   correctAnswers: number;
   rewardTokens: number;
+  scoreProofMemo: string;
+  scoreProofSignature: string;
   answers: Array<{
     questionId: string;
     selectedOptionKey: OptionKey;

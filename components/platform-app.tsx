@@ -1,6 +1,8 @@
 "use client";
 
+import { createElement } from "react";
 import { Button, Drawer, Input, Modal } from "antd";
+import toast from "react-hot-toast";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ChangeEvent } from "react";
@@ -9,6 +11,7 @@ import { useCourses } from "@/hooks/useCourses";
 import { useCreateCourse } from "@/hooks/useCreateCourse";
 import { useExams } from "@/hooks/useExams";
 import { usePayment } from "@/hooks/usePayment";
+import { useSubmissionProof } from "@/hooks/useSubmissionProof";
 import { useVerifyPayment } from "@/hooks/useVerifyPayment";
 import { useBagsSwap } from "@/hooks/useBagsSwap";
 import { useWalletSession } from "@/components/wallet-session-provider";
@@ -48,6 +51,36 @@ function formatWalletAddress(walletAddress: string) {
   }
 
   return `${walletAddress.slice(0, 4)}...${walletAddress.slice(-4)}`;
+}
+
+function buildSolscanTxUrl(signature: string) {
+  return `https://solscan.io/tx/${signature}`;
+}
+
+function formatSignature(signature: string) {
+  if (signature.length <= 12) {
+    return signature;
+  }
+
+  return `${signature.slice(0, 8)}...${signature.slice(-8)}`;
+}
+
+function createExplorerToastMessage(signature: string, label: string) {
+  return createElement(
+    "span",
+    null,
+    `${label} `,
+    createElement(
+      "a",
+      {
+        href: buildSolscanTxUrl(signature),
+        target: "_blank",
+        rel: "noreferrer",
+        className: "underline",
+      },
+      formatSignature(signature),
+    ),
+  );
 }
 
 function getWalletProvider(): SolanaProvider | null {
@@ -166,6 +199,7 @@ export function PlatformApp() {
     isLoading: examLoading,
   } = useExams();
   const { payForExam, isPaying } = usePayment();
+  const { submitSubmissionProof } = useSubmissionProof();
   const { verifyPayment, isVerifying } = useVerifyPayment();
   const { swapForExam, isSwapping } = useBagsSwap();
   const {
@@ -687,18 +721,48 @@ export function PlatformApp() {
       studentWallet: walletAddress,
       answers,
     });
+    let finalizedSubmission = result.submission;
+    let submissionProofError = "";
+    const provider = getWalletProvider();
+
+    if (!provider) {
+      submissionProofError = "Wallet provider unavailable for score proof signing.";
+    } else if (!result.submission.scoreProofSignature) {
+      try {
+        finalizedSubmission = await submitSubmissionProof({
+          examId: selectedExam.id,
+          submissionId: result.submission.id,
+          studentWallet: walletAddress,
+          wallet: provider,
+          scoreProofMemo: result.submission.scoreProofMemo || result.reward.memo,
+        });
+        if (finalizedSubmission.scoreProofSignature) {
+          toast.success(
+            createExplorerToastMessage(
+              finalizedSubmission.scoreProofSignature,
+              "Score proof saved. View on Solscan:",
+            ),
+          );
+        }
+      } catch (error) {
+        submissionProofError =
+          error instanceof Error ? error.message : "Unable to save score proof on-chain.";
+        toast.error(submissionProofError);
+      }
+    }
+
     const reviewedExam = await fetchExam(selectedExam.id, walletAddress);
 
-    setLatestSubmission(result.submission);
-    setLatestScore(formatSubmissionScore(result.submission));
+    setLatestSubmission(finalizedSubmission);
+    setLatestScore(formatSubmissionScore(finalizedSubmission));
     setSelectedExam({
       ...reviewedExam.exam,
-      latestSubmission: result.submission,
+      latestSubmission: finalizedSubmission,
     });
     setExamUnlocked(reviewedExam.unlocked);
     setStudentAnswers(
       Object.fromEntries(
-        result.submission.answers.map((answer) => [answer.questionId, answer.selectedOptionKey]),
+        finalizedSubmission.answers.map((answer) => [answer.questionId, answer.selectedOptionKey]),
       ),
     );
     setIsReviewMode(true);
@@ -706,7 +770,7 @@ export function PlatformApp() {
       current
         ? {
             ...current,
-            latestSubmission: result.submission,
+            latestSubmission: finalizedSubmission,
           }
         : current,
     );
@@ -715,15 +779,17 @@ export function PlatformApp() {
         exam.id === selectedExam.id
           ? {
               ...exam,
-              latestSubmission: result.submission,
+              latestSubmission: finalizedSubmission,
             }
           : exam,
       ),
     );
     setStatusMessage(
-      result.reward.eligible
-        ? `Exam submitted. Reward sent: ${result.reward.amountTokens} tokens.`
-        : "Exam submitted.",
+      submissionProofError
+        ? `Exam submitted, but score proof failed: ${submissionProofError}`
+        : result.reward.eligible
+          ? `Exam submitted. Reward sent: ${result.reward.amountTokens} tokens. Score proof saved on-chain.`
+          : "Exam submitted. Score proof saved on-chain.",
     );
     window.location.reload();
   }

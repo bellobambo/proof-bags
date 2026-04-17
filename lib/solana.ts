@@ -18,6 +18,8 @@ import bs58 from "bs58";
 
 import { getServerEnv } from "@/lib/env";
 
+const MAX_MEMO_LENGTH = 220;
+
 export function getSolanaConnection() {
   const rpcUrl = getServerEnv().solanaRpcUrl || clusterApiUrl("devnet");
   return new Connection(rpcUrl, "confirmed");
@@ -153,6 +155,25 @@ function getAuthorityKeypair() {
   return Keypair.fromSecretKey(decoded);
 }
 
+function truncateMemoValue(value: string, maxLength: number) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+export function buildExamSubmissionMemo(params: {
+  examTitle: string;
+  scorePercent: number;
+}) {
+  const normalizedTitle = params.examTitle.trim().replace(/\s+/g, " ");
+  return truncateMemoValue(
+    `exam:${normalizedTitle} | score:${params.scorePercent}%`,
+    MAX_MEMO_LENGTH,
+  );
+}
+
 export async function payoutTokens(params: {
   recipientWallet: string;
   amountTokens: number;
@@ -186,20 +207,20 @@ export async function payoutTokens(params: {
     recipientOwner,
   );
 
-  const instruction = createTransferCheckedInstruction(
-    sourceAccount.address,
-    mint,
-    destinationAccount.address,
-    authority.publicKey,
-    parseTokenAmountToBaseUnits(params.amountTokens, decimals),
-    decimals,
+  const transaction = new Transaction().add(
+    createTransferCheckedInstruction(
+      sourceAccount.address,
+      mint,
+      destinationAccount.address,
+      authority.publicKey,
+      parseTokenAmountToBaseUnits(params.amountTokens, decimals),
+      decimals,
+    ),
   );
 
   const { blockhash } = await connection.getLatestBlockhash("confirmed");
-  const transaction = new Transaction({
-    feePayer: authority.publicKey,
-    recentBlockhash: blockhash,
-  }).add(instruction);
+  transaction.feePayer = authority.publicKey;
+  transaction.recentBlockhash = blockhash;
 
   transaction.sign(authority);
   const signature = await connection.sendRawTransaction(transaction.serialize());
