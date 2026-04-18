@@ -240,7 +240,6 @@ export function PlatformApp() {
   const [paymentSignature, setPaymentSignature] = useState("");
   const [isReviewMode, setIsReviewMode] = useState(false);
   const [tokenBalanceDisplay, setTokenBalanceDisplay] = useState("Unavailable");
-  const [statusMessage, setStatusMessage] = useState("");
   const [isActionsDrawerOpen, setIsActionsDrawerOpen] = useState(false);
   const [tokenDetails, setTokenDetails] = useState<BagsTokenDetails | null>(null);
   const [isTokenDetailsLoading, setIsTokenDetailsLoading] = useState(false);
@@ -278,6 +277,10 @@ export function PlatformApp() {
   const isTutorViewingOwnExam = Boolean(
     selectedExam && activeRole === "tutor" && selectedExam.tutorWallet === walletAddress,
   );
+
+  function setStatusMessage(message: string) {
+    toast(message);
+  }
 
   useEffect(() => {
     let active = true;
@@ -784,7 +787,9 @@ export function PlatformApp() {
     });
 
     setStatusMessage(
-      `Swap confirmed for about ${swap.estimatedOutputTokens} token(s). Refreshing balance...`,
+      swap.confirmed
+        ? `Swap confirmed for about ${swap.estimatedOutputTokens} token(s). Balance refreshed. Click "Pay and Unlock" to access the exam.`
+        : `Swap submitted for about ${swap.estimatedOutputTokens} token(s). If the balance updates, click "Pay and Unlock" to access the exam.`,
     );
 
     const balance = await fetchBalance(walletAddress);
@@ -963,7 +968,6 @@ export function PlatformApp() {
       </header>
 
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-6 py-8 lg:px-10 lg:py-10">
-   
         <section />
 
         {!isExamsPage ? (
