@@ -279,6 +279,7 @@ export function PlatformApp() {
   );
 
   function setStatusMessage(_message?: string) {
+    void _message;
   }
 
   useEffect(() => {
@@ -940,7 +941,7 @@ export function PlatformApp() {
                 </span>
                 {walletAddress ? (
                   <div className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] px-4 py-2 text-sm text-[#46666c]">
-                     {tokenBalanceDisplay} $BFORBAMBO
+                     {tokenBalanceDisplay} $B4BAMBO
                   </div>
                 ) : null}
               </>
@@ -1172,7 +1173,7 @@ export function PlatformApp() {
                       </p>
                       <p className="mt-3 text-sm leading-6 text-[#46666c]">{exam.description}</p>
                       <p className="mt-3 text-xs uppercase tracking-[0.22em] text-[#5a787d]">
-                        Access fee: {exam.tokenPrice} $BFORBAMBO
+                        Access fee: {exam.tokenPrice} $B4BAMBO
                       </p>
                       {cardLatestScore ? (
                         <p className="mt-3 text-sm text-[#46666c]">
@@ -1314,7 +1315,7 @@ export function PlatformApp() {
           selectedExam ? (
             <div>
               <p className="text-xs uppercase tracking-[0.22em] text-[var(--primary)]">
-                Access fee: {selectedExam.tokenPrice} $BFORBAMBO
+                Access fee: {selectedExam.tokenPrice} $B4BAMBO
               </p>
               <h2 className="mt-2 text-2xl font-semibold text-[var(--primary-strong)]">
                 {selectedExam.title}
@@ -1547,12 +1548,31 @@ export function PlatformApp() {
               <Input
                 value={examForm.tokenPrice}
                 onChange={(event) =>
-                  setExamForm((current) => ({
-                    ...current,
-                    tokenPrice: event.target.value,
-                  }))
+                  setExamForm((current) => {
+                    const nextValue = event.target.value.trim();
+
+                    if (!nextValue) {
+                      return {
+                        ...current,
+                        tokenPrice: "",
+                      };
+                    }
+
+                    const parsedValue = Number(nextValue);
+
+                    if (!Number.isFinite(parsedValue)) {
+                      return current;
+                    }
+
+                    return {
+                      ...current,
+                      tokenPrice: String(Math.min(parsedValue, 20_000)),
+                    };
+                  })
                 }
                 placeholder="5"
+                inputMode="decimal"
+                max={20000}
                 size="large"
                 className="!rounded-lg !text-lg !py-3"
               />
