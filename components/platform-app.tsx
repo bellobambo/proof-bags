@@ -278,8 +278,7 @@ export function PlatformApp() {
     selectedExam && activeRole === "tutor" && selectedExam.tutorWallet === walletAddress,
   );
 
-  function setStatusMessage(message: string) {
-    toast(message);
+  function setStatusMessage(_message?: string) {
   }
 
   useEffect(() => {
