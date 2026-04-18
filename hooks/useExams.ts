@@ -44,6 +44,7 @@ export function useExams() {
     courseId: string;
     title: string;
     description: string;
+    creationFeeSignature: string;
     tokenPrice: number;
     passThresholdPercent: number;
     questions: ExamQuestionInput[];

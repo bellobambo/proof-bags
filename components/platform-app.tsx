@@ -16,8 +16,10 @@ import { usePayment } from "@/hooks/usePayment";
 import { useSubmissionProof } from "@/hooks/useSubmissionProof";
 import { useVerifyPayment } from "@/hooks/useVerifyPayment";
 import { useBagsSwap } from "@/hooks/useBagsSwap";
+import { useExamCreationFee } from "@/hooks/useExamCreationFee";
 import { useWalletSession } from "@/components/wallet-session-provider";
 import { apiFetch } from "@/lib/client-api";
+import { getClientEnv } from "@/lib/env";
 import {
   createEmptyQuestionInput,
   OPTION_KEYS,
@@ -217,6 +219,7 @@ export function PlatformApp() {
   const { submitSubmissionProof } = useSubmissionProof();
   const { verifyPayment, isVerifying } = useVerifyPayment();
   const { swapForExam, isSwapping } = useBagsSwap();
+  const { payExamCreationFee, isPayingFee } = useExamCreationFee();
   const {
     walletAddress,
     role,
@@ -280,6 +283,10 @@ export function PlatformApp() {
 
   function setStatusMessage(_message?: string) {
     void _message;
+  }
+
+  function showErrorToast(error: unknown, fallbackMessage: string) {
+    toast.error(error instanceof Error ? error.message : fallbackMessage);
   }
 
   useEffect(() => {
@@ -489,16 +496,20 @@ export function PlatformApp() {
       return;
     }
 
-    await createCourse({
-      tutorWallet: walletAddress,
-      title,
-      description: "",
-    });
+    try {
+      await createCourse({
+        tutorWallet: walletAddress,
+        title,
+        description: "",
+      });
 
-    setCourseForm({ title: "" });
-    await refreshCourses();
-    setIsCreateCourseModalOpen(false);
-    setStatusMessage("Course created.");
+      setCourseForm({ title: "" });
+      await refreshCourses();
+      setIsCreateCourseModalOpen(false);
+      setStatusMessage("Course created.");
+    } catch (error) {
+      showErrorToast(error, "Unable to create course.");
+    }
   }
 
   async function handleEnrollCourse(courseId: string) {
@@ -670,26 +681,44 @@ export function PlatformApp() {
       return;
     }
 
-    const exam = await createExam({
-      tutorWallet: walletAddress,
-      courseId: selectedCourseId,
-      title: examForm.title.trim(),
-      description: examForm.description.trim(),
-      tokenPrice: Number(examForm.tokenPrice),
-      passThresholdPercent: 70,
-      questions: normalizedQuestions,
-    });
+    const provider = getWalletProvider();
 
-    setSelectedExam(exam);
-    setAllExams((current) => [exam, ...current]);
-    setExamForm({
-      title: "",
-      description: "",
-      tokenPrice: "5",
-    });
-    resetExamBuilder();
-    setIsCreateExamDrawerOpen(false);
-    setStatusMessage(`Exam created. ID: ${exam.id}`);
+    if (!provider) {
+      setStatusMessage("Wallet provider unavailable.");
+      return;
+    }
+
+    try {
+      const creationFeeSignature = await payExamCreationFee({
+        wallet: provider,
+        tutorWallet: walletAddress,
+        amountTokens: getClientEnv().examCreationFeeTokens,
+      });
+
+      const exam = await createExam({
+        tutorWallet: walletAddress,
+        courseId: selectedCourseId,
+        title: examForm.title.trim(),
+        description: examForm.description.trim(),
+        creationFeeSignature,
+        tokenPrice: Number(examForm.tokenPrice),
+        passThresholdPercent: 70,
+        questions: normalizedQuestions,
+      });
+
+      setSelectedExam(exam);
+      setAllExams((current) => [exam, ...current]);
+      setExamForm({
+        title: "",
+        description: "",
+        tokenPrice: "5",
+      });
+      resetExamBuilder();
+      setIsCreateExamDrawerOpen(false);
+      setStatusMessage(`Exam created. ID: ${exam.id}`);
+    } catch (error) {
+      showErrorToast(error, "Unable to create exam.");
+    }
   }
 
   async function loadExam(examId: string, options?: { reviewMode?: boolean }) {
@@ -729,43 +758,47 @@ export function PlatformApp() {
       return;
     }
 
-    const signature = await payForExam({
-      wallet: provider,
-      studentWallet: walletAddress,
-      amountTokens: selectedExam.tokenPrice,
-      tutorWallet: selectedExam.tutorWallet,
-    });
+    try {
+      const signature = await payForExam({
+        wallet: provider,
+        studentWallet: walletAddress,
+        amountTokens: selectedExam.tokenPrice,
+        tutorWallet: selectedExam.tutorWallet,
+      });
 
-    setPaymentSignature(signature);
-    setStatusMessage("Payment submitted. Verifying on-chain transfer...");
+      setPaymentSignature(signature);
+      setStatusMessage("Payment submitted. Verifying on-chain transfer...");
 
-    let verified = false;
-    let lastVerifyError: Error | null = null;
+      let verified = false;
+      let lastVerifyError: Error | null = null;
 
-    for (let attempt = 0; attempt < PAYMENT_VERIFY_RETRY_COUNT; attempt += 1) {
-      try {
-        await verifyPayment({
-          examId: selectedExam.id,
-          studentWallet: walletAddress,
-          signature,
-        });
-        verified = true;
-        break;
-      } catch (caughtError) {
-        lastVerifyError =
-          caughtError instanceof Error
-            ? caughtError
-            : new Error("Unable to verify payment.");
-        await sleep(PAYMENT_VERIFY_RETRY_DELAY_MS);
+      for (let attempt = 0; attempt < PAYMENT_VERIFY_RETRY_COUNT; attempt += 1) {
+        try {
+          await verifyPayment({
+            examId: selectedExam.id,
+            studentWallet: walletAddress,
+            signature,
+          });
+          verified = true;
+          break;
+        } catch (caughtError) {
+          lastVerifyError =
+            caughtError instanceof Error
+              ? caughtError
+              : new Error("Unable to verify payment.");
+          await sleep(PAYMENT_VERIFY_RETRY_DELAY_MS);
+        }
       }
-    }
 
-    if (!verified) {
-      throw lastVerifyError ?? new Error("Unable to verify payment.");
-    }
+      if (!verified) {
+        throw lastVerifyError ?? new Error("Unable to verify payment.");
+      }
 
-    setExamUnlocked(true);
-    setStatusMessage("Payment verified. Exam unlocked.");
+      setExamUnlocked(true);
+      setStatusMessage("Payment verified. Exam unlocked.");
+    } catch (error) {
+      showErrorToast(error, "Unable to pay and unlock exam.");
+    }
   }
 
   async function handleSwapForExam() {
@@ -780,20 +813,24 @@ export function PlatformApp() {
       return;
     }
 
-    const swap = await swapForExam({
-      examId: selectedExam.id,
-      studentWallet: walletAddress,
-      wallet: provider,
-    });
+    try {
+      const swap = await swapForExam({
+        examId: selectedExam.id,
+        studentWallet: walletAddress,
+        wallet: provider,
+      });
 
-    setStatusMessage(
-      swap.confirmed
-        ? `Swap confirmed for about ${swap.estimatedOutputTokens} token(s). Balance refreshed. Click "Pay and Unlock" to access the exam.`
-        : `Swap submitted for about ${swap.estimatedOutputTokens} token(s). If the balance updates, click "Pay and Unlock" to access the exam.`,
-    );
+      setStatusMessage(
+        swap.confirmed
+          ? `Swap confirmed for about ${swap.estimatedOutputTokens} token(s). Balance refreshed. Click "Pay and Unlock" to access the exam.`
+          : `Swap submitted for about ${swap.estimatedOutputTokens} token(s). If the balance updates, click "Pay and Unlock" to access the exam.`,
+      );
 
-    const balance = await fetchBalance(walletAddress);
-    setTokenBalanceDisplay(formatTokenBalance(balance.amountRaw, balance.decimals));
+      const balance = await fetchBalance(walletAddress);
+      setTokenBalanceDisplay(formatTokenBalance(balance.amountRaw, balance.decimals));
+    } catch (error) {
+      showErrorToast(error, "Unable to complete swap.");
+    }
   }
 
   async function handleSubmitExam() {
@@ -817,83 +854,88 @@ export function PlatformApp() {
       selectedOptionKey: studentAnswers[question.id],
     }));
 
-    const result = await submitExam({
-      examId: selectedExam.id,
-      studentWallet: walletAddress,
-      answers,
-    });
-    let finalizedSubmission = result.submission;
-    let submissionProofError = "";
-    const provider = getWalletProvider();
+    try {
+      const result = await submitExam({
+        examId: selectedExam.id,
+        studentWallet: walletAddress,
+        answers,
+      });
+      let finalizedSubmission = result.submission;
+      let submissionProofError = "";
+      const provider = getWalletProvider();
 
-    if (!provider) {
-      submissionProofError = "Wallet provider unavailable for score proof signing.";
-    } else if (!result.submission.scoreProofSignature) {
-      try {
-        finalizedSubmission = await submitSubmissionProof({
-          examId: selectedExam.id,
-          submissionId: result.submission.id,
-          studentWallet: walletAddress,
-          wallet: provider,
-          scoreProofMemo: result.submission.scoreProofMemo || result.reward.memo,
-        });
-        if (finalizedSubmission.scoreProofSignature) {
-          toast.success(
-            createExplorerToastMessage(
-              finalizedSubmission.scoreProofSignature,
-              "Score proof saved. View on Solscan:",
-            ),
-          );
-        }
-      } catch (error) {
-        submissionProofError =
-          error instanceof Error ? error.message : "Unable to save score proof on-chain.";
-        toast.error(submissionProofError);
-      }
-    }
-
-    const reviewedExam = await fetchExam(selectedExam.id, walletAddress);
-
-    setLatestSubmission(finalizedSubmission);
-    setLatestScore(formatSubmissionScore(finalizedSubmission));
-    setSelectedExam({
-      ...reviewedExam.exam,
-      latestSubmission: finalizedSubmission,
-    });
-    setExamUnlocked(reviewedExam.unlocked);
-    setStudentAnswers(
-      Object.fromEntries(
-        finalizedSubmission.answers.map((answer) => [answer.questionId, answer.selectedOptionKey]),
-      ),
-    );
-    setIsReviewMode(true);
-    setSelectedExam((current) =>
-      current
-        ? {
-            ...current,
-            latestSubmission: finalizedSubmission,
+      if (!provider) {
+        submissionProofError = "Wallet provider unavailable for score proof signing.";
+      } else if (!result.submission.scoreProofSignature) {
+        try {
+          finalizedSubmission = await submitSubmissionProof({
+            examId: selectedExam.id,
+            submissionId: result.submission.id,
+            studentWallet: walletAddress,
+            wallet: provider,
+            scoreProofMemo: result.submission.scoreProofMemo || result.reward.memo,
+          });
+          if (finalizedSubmission.scoreProofSignature) {
+            toast.success(
+              createExplorerToastMessage(
+                finalizedSubmission.scoreProofSignature,
+                "Score proof saved. View on Solscan:",
+              ),
+            );
           }
-        : current,
-    );
-    setAllExams((current) =>
-      current.map((exam) =>
-        exam.id === selectedExam.id
+        } catch (error) {
+          submissionProofError =
+            error instanceof Error ? error.message : "Unable to save score proof on-chain.";
+          toast.error(submissionProofError);
+        }
+      }
+
+      const reviewedExam = await fetchExam(selectedExam.id, walletAddress);
+
+      setLatestSubmission(finalizedSubmission);
+      setLatestScore(formatSubmissionScore(finalizedSubmission));
+      setSelectedExam({
+        ...reviewedExam.exam,
+        latestSubmission: finalizedSubmission,
+      });
+      setExamUnlocked(reviewedExam.unlocked);
+      setStudentAnswers(
+        Object.fromEntries(
+          finalizedSubmission.answers.map((answer) => [answer.questionId, answer.selectedOptionKey]),
+        ),
+      );
+      setIsReviewMode(true);
+      setSelectedExam((current) =>
+        current
           ? {
-              ...exam,
+              ...current,
               latestSubmission: finalizedSubmission,
             }
-          : exam,
-      ),
-    );
-    setStatusMessage(
-      submissionProofError
-        ? `Exam submitted, but score proof failed: ${submissionProofError}`
-        : result.reward.eligible
-          ? `Exam submitted. Reward sent: ${result.reward.amountTokens} tokens. Score proof saved on-chain.`
-          : "Exam submitted. Score proof saved on-chain.",
-    );
-    setIsSubmittingExam(false);
-    window.location.reload();
+          : current,
+      );
+      setAllExams((current) =>
+        current.map((exam) =>
+          exam.id === selectedExam.id
+            ? {
+                ...exam,
+                latestSubmission: finalizedSubmission,
+              }
+            : exam,
+        ),
+      );
+      setStatusMessage(
+        submissionProofError
+          ? `Exam submitted, but score proof failed: ${submissionProofError}`
+          : result.reward.eligible
+            ? `Exam submitted. Reward sent: ${result.reward.amountTokens} tokens. Score proof saved on-chain.`
+            : "Exam submitted. Score proof saved on-chain.",
+      );
+      window.location.reload();
+    } catch (error) {
+      showErrorToast(error, "Unable to submit exam.");
+    } finally {
+      setIsSubmittingExam(false);
+    }
   }
 
   if (!hydrated) {
@@ -1498,6 +1540,9 @@ export function PlatformApp() {
             <p className="mt-1 text-sm text-[#5a787d]">
               {selectedCourseTitle || "Select a course"}
             </p>
+            <p className="mt-2 text-xs uppercase tracking-[0.16em] text-[#5a787d]">
+              Publish fee: {getClientEnv().examCreationFeeTokens} $B4BAMBO
+            </p>
           </div>
         }
         placement="right"
@@ -1793,11 +1838,11 @@ export function PlatformApp() {
             </Button>
             <Button
               type="primary"
-              loading={examLoading}
+              loading={examLoading || isPayingFee}
               onClick={() => void handleCreateExam()}
               className="!h-auto !rounded-lg !bg-[var(--primary)] !px-5 !py-2.5 !font-semibold !shadow-none"
             >
-              Create Exam
+              {isPayingFee ? "Creating" : "Create Exam"}
             </Button>
           </div>
         </div>

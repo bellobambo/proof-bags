@@ -144,6 +144,24 @@ export async function verifyStudentPayment(params: {
   return transaction;
 }
 
+export async function verifyTokenTransfer(params: {
+  signature: string;
+  authorityWallet: string;
+  recipientTokenAccount: string;
+  amountTokens: number;
+}) {
+  return verifyStudentPayment({
+    signature: params.signature,
+    studentWallet: params.authorityWallet,
+    expectedTransfers: [
+      {
+        recipientTokenAccount: params.recipientTokenAccount,
+        amountTokens: params.amountTokens,
+      },
+    ],
+  });
+}
+
 function getAuthorityKeypair() {
   const secretKey = getServerEnv().payoutAuthoritySecretKey;
 

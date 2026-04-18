@@ -2,11 +2,14 @@ import { Types } from "mongoose";
 
 import Course from "@/models/Course";
 import Exam from "@/models/Exam";
+import ExamCreationFee from "@/models/ExamCreationFee";
 import User from "@/models/User";
 import { connectToDatabase } from "@/lib/db";
 import { validateExamQuestionInput } from "@/lib/exam-questions";
+import { getServerEnv } from "@/lib/env";
 import { errorResponse, normalizeWalletAddress, successResponse } from "@/lib/api";
 import { serializeExam } from "@/lib/serializers";
+import { getPlatformTreasuryTokenAccount, validateTokenMintDecimals, verifyTokenTransfer } from "@/lib/solana";
 
 export async function POST(request: Request) {
   try {
@@ -15,13 +18,21 @@ export async function POST(request: Request) {
     const courseId = body.courseId ?? "";
     const title = body.title?.trim?.() ?? "";
     const description = body.description?.trim?.() ?? "";
+    const creationFeeSignature = body.creationFeeSignature?.trim?.() ?? "";
     const tokenPrice = Number(body.tokenPrice ?? 0);
     const passThresholdPercent = Number(body.passThresholdPercent ?? 70);
     const rawQuestions = Array.isArray(body.questions) ? body.questions : [];
 
-    if (!tutorWallet || !courseId || !title || !description || rawQuestions.length === 0) {
+    if (
+      !tutorWallet
+      || !courseId
+      || !title
+      || !description
+      || !creationFeeSignature
+      || rawQuestions.length === 0
+    ) {
       return errorResponse(
-        "tutorWallet, courseId, title, description, and questions are required.",
+        "tutorWallet, courseId, title, description, creationFeeSignature, and questions are required.",
       );
     }
 
@@ -65,6 +76,7 @@ export async function POST(request: Request) {
     }
 
     await connectToDatabase();
+    await validateTokenMintDecimals();
 
     const tutor = await User.findOne({ walletAddress: tutorWallet, role: "tutor" });
 
@@ -78,6 +90,21 @@ export async function POST(request: Request) {
       return errorResponse("Course not found for this tutor.", 404);
     }
 
+    const existingFee = await ExamCreationFee.findOne({
+      transactionSignature: creationFeeSignature,
+    });
+
+    if (existingFee) {
+      return errorResponse("This exam creation fee transaction has already been used.", 409);
+    }
+
+    await verifyTokenTransfer({
+      signature: creationFeeSignature,
+      authorityWallet: tutorWallet,
+      recipientTokenAccount: getPlatformTreasuryTokenAccount().toBase58(),
+      amountTokens: getServerEnv().examCreationFeeTokens,
+    });
+
     const exam = await Exam.create({
       courseId,
       tutorWallet,
@@ -86,6 +113,14 @@ export async function POST(request: Request) {
       tokenPrice,
       passThresholdPercent,
       questions,
+    });
+
+    await ExamCreationFee.create({
+      courseId,
+      examId: exam._id,
+      tutorWallet,
+      transactionSignature: creationFeeSignature,
+      amountTokens: getServerEnv().examCreationFeeTokens,
     });
 
     return successResponse(

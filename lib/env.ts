@@ -34,6 +34,7 @@ export function getServerEnv() {
     payoutAuthoritySecretKey: process.env.PLATFORM_SIGNER_SECRET_KEY ?? "",
     rewardThresholdPercent: Number(process.env.REWARD_THRESHOLD_PERCENT ?? "80"),
     rewardAmountTokens: Number(process.env.REWARD_AMOUNT_TOKENS ?? "0"),
+    examCreationFeeTokens: Number(process.env.EXAM_CREATION_FEE_TOKENS ?? "5"),
   };
 }
 
@@ -44,5 +45,6 @@ export function getClientEnv() {
     bagsTokenUrl: process.env.NEXT_PUBLIC_BAGS_TOKEN_URL ?? "",
     solanaRpcUrl: process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "",
     treasuryWallet: process.env.NEXT_PUBLIC_PLATFORM_TREASURY_WALLET ?? "",
+    examCreationFeeTokens: Number(process.env.NEXT_PUBLIC_EXAM_CREATION_FEE_TOKENS ?? "5"),
   };
 }
