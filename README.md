@@ -1,6 +1,6 @@
-# Proof Bags
+# Proof
 
-Proof Bags is a Assessment Managment Platform built on Solana. Tutors create courses and exams with a little fee, students enroll with a wallet, pay to access exams, submit answers, and can store their score as proof of assessment on-chain on the solana network.
+Proof is a Assessment Managment Platform built on Solana. Tutors create courses and exams with a little fee, students enroll with a wallet, pay to access exams, submit answers, and can store their score as proof of assessment on-chain on the solana network.
 
 ## Bags and $B4BAMBO
 
