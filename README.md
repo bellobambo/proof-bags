@@ -1,36 +1,16 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Proof Bags
 
-## Getting Started
+Proof Bags is a Assessment Managment Platform built on Solana. Tutors create courses and exams with a little fee, students enroll with a wallet, pay to access exams, submit answers, and can store their score as proof of assessment on-chain on the solana network.
 
-First, run the development server:
+## Bags and $B4BAMBO
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+The app uses Bags as the trading and token layer for the platform token, `$B4BAMBO`.
+Proof is currently powered by [@BagsApp](https://bags.fm): Bags.fm for token launch, the Bags SDK for swap functionality, and the Bags API for token details. More Bags integrations are coming.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- Tutors pay a little `$B4BAMBO` creation fee before publishing an exam.
+- Students access exams by paying the exam price in `$B4BAMBO`.
+- Student can request a Bags quote, build a swap from SOL into `$B4BAMBO`, and relay the signed transaction through Bags.
+- Verified exam payments are split between the tutor and the platform treasury.
+- Passing submissions can receive `$B4BAMBO` rewards when rewards are configured.
+- The app also reads Bags token details, holder/creator fee data, recent claims, and live quote information for display in the UI.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
