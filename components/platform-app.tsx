@@ -1029,9 +1029,7 @@ export function PlatformApp() {
               <Surface className="mx-auto flex min-h-[55vh] w-full items-center justify-center">
                 <div className="w-full max-w-lg rounded-xl border border-[rgba(18,60,68,0.1)] bg-white p-6 shadow-[0_28px_70px_rgba(15,35,41,0.14)] sm:p-7">
                   <div className="border-b border-[var(--border)] pb-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--primary)]">
-                      Account setup
-                    </p>
+                 
                     <h2 className="mt-2 text-2xl font-semibold text-[var(--primary-strong)]">
                       Complete registration
                     </h2>
